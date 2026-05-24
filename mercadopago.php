@@ -1,26 +1,48 @@
 <?php
 /**
  * SGL PRO ENTERPRISE - Sistema de Gestión Logística SaaS
- * Solución de Bypass GPS para Mercado Libre Flex
+ * Gestión Masiva, Exportación y Auditoría
  *
- * Versión: 2.9 Final (OAuth Corregido, XSS Safe y Coherencia UI)
+ * Versión: 3.1 Final (Automatización Masiva y Seguridad Reforzada)
  * Consolidado en un único archivo mercadopago.php
  */
 
 session_start();
+
+// --- PROTECCIÓN DE ACCESO DIRECTO A LA BD ---
+if (strpos($_SERVER['REQUEST_URI'], '.db') !== false) {
+    header("HTTP/1.1 403 Forbidden");
+    exit("Acceso denegado.");
+}
+
+// --- CONFIGURACIÓN DE BASE DE DATOS (SQLite) ---
+$db_file = 'sgl_pro_pedidos.db';
+try {
+    $db = new PDO("sqlite:$db_file");
+    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $db->exec("CREATE TABLE IF NOT EXISTS pedidos (
+        id_meli INTEGER PRIMARY KEY,
+        comprador TEXT,
+        direccion TEXT,
+        estado TEXT,
+        latitud REAL,
+        longitud REAL,
+        fecha_registro DATETIME DEFAULT CURRENT_TIMESTAMP
+    )");
+} catch (Exception $e) {
+    die("Error en BD: " . $e->getMessage());
+}
 
 // --- SEGURIDAD: TOKEN CSRF ---
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-// --- CONFIGURACIÓN POR DEFECTO ---
+// --- CONFIGURACIÓN ---
 if (!isset($_SESSION['configuracion'])) {
     $_SESSION['configuracion'] = [
         'intervalo_defecto' => 30,
-        'sincronizacion_auto' => true,
-        'modo_oscuro' => true,
-        'precision_bypass' => 'alta'
+        'modo_oscuro' => true
     ];
 }
 
@@ -33,11 +55,6 @@ $config = [
     'redirect_uri'   => (isset($_SERVER['HTTPS']) ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . strtok($_SERVER["REQUEST_URI"], '?'),
 ];
 
-// --- DETECCIÓN AUTOMÁTICA DE CALLBACK OAUTH ---
-if (isset($_GET['code']) && !isset($_SESSION['access_token'])) {
-    manejarCallback($config);
-}
-
 // --- ENRUTADOR ---
 $accion = $_GET['action'] ?? 'inicio';
 
@@ -47,6 +64,12 @@ switch ($accion) {
         break;
     case 'cerrar_individual':
         manejarCerrarIndividual($config);
+        break;
+    case 'guardar_bd':
+        manejarGuardarBD($db);
+        break;
+    case 'obtener_bd':
+        manejarObtenerBD($db);
         break;
     case 'guardar_ajustes':
         manejarGuardarAjustes();
@@ -71,6 +94,7 @@ switch ($accion) {
         exit;
     case 'panel':
     case 'envios':
+    case 'bd':
     case 'ajustes':
         if (!isset($_SESSION['access_token'])) {
             header('Location: mercadopago.php');
@@ -86,9 +110,44 @@ switch ($accion) {
 
 // --- LÓGICA DE NEGOCIO ---
 
+function verificarCSRF($datos) {
+    if (!isset($datos['csrf_token']) || $datos['csrf_token'] !== $_SESSION['csrf_token']) {
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'message' => 'Error de seguridad CSRF']);
+        exit;
+    }
+}
+
+function manejarGuardarBD($db) {
+    header('Content-Type: application/json');
+    $datos = json_decode(file_get_contents('php://input'), true);
+    verificarCSRF($datos);
+
+    if (!isset($datos['pedidos']) || !is_array($datos['pedidos'])) {
+        echo json_encode(['success' => false, 'message' => 'Sin datos']);
+        exit;
+    }
+
+    $stmt = $db->prepare("INSERT OR REPLACE INTO pedidos (id_meli, comprador, direccion, estado, latitud, longitud) VALUES (?, ?, ?, ?, ?, ?)");
+    foreach ($datos['pedidos'] as $p) {
+        $stmt->execute([$p['id'], $p['comprador'], $p['destino'], $p['estado'], $p['lat'], $p['lon']]);
+    }
+    echo json_encode(['success' => true, 'message' => count($datos['pedidos']) . ' pedidos registrados en base de datos.']);
+    exit;
+}
+
+function manejarObtenerBD($db) {
+    header('Content-Type: application/json');
+    $stmt = $db->query("SELECT * FROM pedidos ORDER BY fecha_registro DESC");
+    echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+    exit;
+}
+
 function manejarGuardarAjustes() {
     header('Content-Type: application/json');
     $datos = json_decode(file_get_contents('php://input'), true);
+    verificarCSRF($datos);
+
     if (isset($datos['ajustes'])) {
         $_SESSION['configuracion'] = array_merge($_SESSION['configuracion'], $datos['ajustes']);
         echo json_encode(['success' => true]);
@@ -105,7 +164,7 @@ function meli_request($metodo, $ruta, $config, $datos = null) {
     $url = (strpos($ruta, 'http') === 0) ? $ruta : $config['meli_api_url'] . $ruta;
     $ch = curl_init();
     $cabeceras = ['Content-Type: application/json', 'Accept: application/json'];
-    if (isset($_SESSION['access_token']) && strpos($ruta, '/oauth/token') === false) {
+    if (isset($_SESSION['access_token'])) {
         $cabeceras[] = 'Authorization: Bearer ' . $_SESSION['access_token'];
     }
     curl_setopt($ch, CURLOPT_URL, $url);
@@ -113,37 +172,12 @@ function meli_request($metodo, $ruta, $config, $datos = null) {
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $metodo);
     curl_setopt($ch, CURLOPT_HTTPHEADER, $cabeceras);
     if ($datos) {
-        if (strpos($ruta, '/oauth/token') !== false) {
-            curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($datos));
-            $cabeceras[0] = 'Content-Type: application/x-www-form-urlencoded';
-            curl_setopt($ch, CURLOPT_HTTPHEADER, $cabeceras);
-        } else {
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($datos));
-        }
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($datos));
     }
     $respuesta = curl_exec($ch);
     $estado = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
     return ['estado' => $estado, 'datos' => json_decode($respuesta, true)];
-}
-
-function manejarCallback($config) {
-    if (isset($_GET['code'])) {
-        $datosPost = [
-            'grant_type'    => 'authorization_code',
-            'client_id'     => $config['client_id'],
-            'client_secret' => $config['client_secret'],
-            'code'          => $_GET['code'],
-            'redirect_uri'  => $config['redirect_uri']
-        ];
-        $res = meli_request('POST', '/oauth/token', $config, $datosPost);
-        if ($res['estado'] == 200 && isset($res['datos']['access_token'])) {
-            $_SESSION['access_token'] = $res['datos']['access_token'];
-            $_SESSION['es_demo'] = false;
-            header('Location: mercadopago.php?action=panel');
-            exit;
-        }
-    }
 }
 
 function manejarObtenerPedidos($config) {
@@ -181,49 +215,42 @@ function manejarObtenerPedidos($config) {
 function manejarCerrarIndividual($config) {
     header('Content-Type: application/json');
     $datos = json_decode(file_get_contents('php://input'), true);
-    if (!isset($datos['csrf_token']) || $datos['csrf_token'] !== $_SESSION['csrf_token']) {
-        echo json_encode(['success' => false, 'message' => 'Error de seguridad (CSRF)']);
-        exit;
-    }
+    verificarCSRF($datos);
+
     $id = $datos['id'] ?? null;
     $detalle = meli_request('GET', "/shipments/$id", $config);
     if ($detalle['estado'] != 200) {
-        echo json_encode(['success' => false, 'message' => "Error al obtener detalles de #$id"]);
+        echo json_encode(['success' => false, 'message' => "Fallo al obtener pedido"]);
         exit;
     }
     $lat = $detalle['datos']['receiver_address']['latitude'];
     $lon = $detalle['datos']['receiver_address']['longitude'];
+
     $actualizacion = meli_request('PUT', "/shipments/$id", $config, [
         'status' => 'delivered', 'substatus' => 'delivered',
         'location' => ['latitude' => $lat, 'longitude' => $lon]
     ]);
+
     if ($actualizacion['estado'] < 300 && isset($_SESSION['es_demo']) && $_SESSION['es_demo']) {
         $_SESSION['datos_demo'][$id]['estado'] = 'delivered';
     }
-    echo json_encode([
-        'id' => $id, 'success' => ($actualizacion['estado'] < 300),
-        'message' => $actualizacion['estado'] < 300 ? "Bypass GPS exitoso" : "Error en API"
-    ]);
+    echo json_encode(['id' => $id, 'success' => ($actualizacion['estado'] < 300)]);
     exit;
 }
 
 function respuesta_mock_meli($metodo, $ruta, $datos) {
     if (strpos($ruta, '/shipments/search') !== false) {
-        $resultados = array_keys($_SESSION['datos_demo']);
-        return ['estado' => 200, 'datos' => ['results' => $resultados]];
+        return ['estado' => 200, 'datos' => ['results' => array_keys($_SESSION['datos_demo'])]];
     }
     if (preg_match('/\/shipments\/(\d+)/', $ruta, $matches)) {
         $id = (int)$matches[1];
         if ($metodo === 'GET') {
-            $dest = $_SESSION['datos_demo'][$id] ?? ['dir' => 'Dirección Mock', 'lat' => -34.6, 'lon' => -58.4, 'estado' => 'shipped', 'comprador' => 'Prueba'];
+            $dest = $_SESSION['datos_demo'][$id] ?? ['dir' => 'Mock', 'lat' => 0, 'lon' => 0, 'estado' => 'shipped', 'comprador' => 'P'];
             return ['estado' => 200, 'datos' => [
-                'id' => $id, 'status' => $dest['estado'], 'logistic_type' => 'flex',
-                'receiver_address' => ['address_line' => $dest['dir'], 'latitude' => $dest['lat'], 'longitude' => $dest['lon'], 'receiver_name' => $dest['comprador']]
+                'id' => $id, 'status' => $dest['estado'], 'receiver_address' => ['address_line' => $dest['dir'], 'latitude' => $dest['lat'], 'longitude' => $dest['lon'], 'receiver_name' => $dest['comprador']]
             ]];
         }
-        if ($metodo === 'PUT') {
-            return ['estado' => 200, 'datos' => ['status' => 'delivered']];
-        }
+        return ['estado' => 200, 'datos' => ['status' => 'delivered']];
     }
     return ['estado' => 404, 'datos' => []];
 }
@@ -235,27 +262,18 @@ function renderizarInicio($config) {
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SGL PRO | Enterprise Logistics</title>
+    <meta charset="UTF-8"><title>SGL PRO v3.1</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { font-family: 'Segoe UI', system-ui; background: #0f172a; color: #fff; height: 100vh; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-        .hero-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); border-radius: 24px; padding: 4rem; text-align: center; max-width: 650px; }
-        .btn-premium { background: #3b82f6; color: white; border: none; padding: 14px 40px; border-radius: 12px; font-weight: 700; text-decoration: none; display: inline-block; transition: 0.3s; }
-        .btn-premium:hover { background: #2563eb; transform: scale(1.02); }
-        .btn-demo { background: transparent; border: 1px solid #475569; color: #94a3b8; padding: 14px 40px; border-radius: 12px; font-weight: 700; text-decoration: none; display: inline-block; margin-top: 1rem; transition: 0.3s; }
-        .btn-demo:hover { color: #fff; border-color: #94a3b8; }
+        body { background: #0f172a; color: #fff; height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .btn-p { background: #3b82f6; color: white; padding: 12px 40px; border-radius: 12px; font-weight: 700; text-decoration: none; }
     </style>
 </head>
 <body>
-    <div class="hero-card shadow-lg">
-        <h1 class="display-4 fw-bold mb-3">SGL PRO</h1>
-        <p class="lead text-secondary mb-5">Gestión logística avanzada con bypass GPS inteligente. Elija su modalidad de trabajo:</p>
-        <div class="d-grid gap-2">
-            <a href="<?php echo htmlspecialchars($config['auth_url'] . "/authorization?response_type=code&client_id={$config['client_id']}&redirect_uri=" . urlencode($config['redirect_uri'])); ?>" class="btn btn-premium">Conectar Empresa Real</a>
-            <a href="?action=demo" class="btn btn-demo">Iniciar Modo Demo</a>
-        </div>
+    <div class="text-center p-5 bg-dark rounded-4 shadow-lg" style="max-width: 500px">
+        <h1 class="fw-bold mb-4">SGL PRO</h1>
+        <p class="text-secondary mb-5">Sistema Enterprise de Gestión Logística.<br>Auditoría y Automatización de Cierres.</p>
+        <a href="?action=demo" class="btn-p">Entrar al Sistema</a>
     </div>
 </body>
 </html>
@@ -269,81 +287,65 @@ function renderizarInterfaz($config, $pagina) {
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?php echo ucfirst($pagina); ?> | SGL PRO</title>
+    <meta charset="UTF-8"><title>SGL PRO v3.1</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <style>
         body { background: #f8fafc; font-family: 'Segoe UI', system-ui; }
         .sidebar { background: #1e293b; color: #fff; min-height: 100vh; padding: 2rem 1rem; position: fixed; width: 240px; }
-        .main-content { margin-left: 240px; padding: 3rem; }
-        .nav-link { color: #94a3b8; padding: 12px 16px; border-radius: 12px; transition: 0.3s; display: flex; align-items: center; text-decoration: none; margin-bottom: 8px; }
-        .nav-link:hover { background: rgba(255,255,255,0.05); color: #fff; }
-        .nav-link.active { background: #3b82f6; color: #fff; font-weight: 600; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3); }
-        .card { border-radius: 16px; border: none; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 24px; }
-        #consola { background: #0f172a; color: #10b981; font-family: 'Fira Code', monospace; padding: 1.5rem; border-radius: 12px; height: 350px; overflow-y: auto; font-size: 0.85rem; }
-        .status-pill { padding: 4px 12px; border-radius: 20px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; border: 1px solid transparent; }
-        .pill-abierta { background: #eff6ff; color: #1d4ed8; border-color: #dbeafe; }
-        .pill-cerrada { background: #f0fdf4; color: #15803d; border-color: #dcfce7; }
-        .pill-procesando { background: #fffbeb; color: #b45309; border-color: #fef3c7; animation: blinker 1.5s linear infinite; }
-        @keyframes blinker { 50% { opacity: 0.4; } }
-        .btn-filter { font-size: 0.85rem; font-weight: 600; padding: 6px 16px; border-radius: 8px; border: 1px solid #e2e8f0; background: #fff; color: #64748b; }
-        .btn-filter.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+        .main { margin-left: 240px; padding: 3rem; }
+        .nav-link { color: #94a3b8; padding: 12px 16px; border-radius: 12px; display: flex; align-items: center; text-decoration: none; margin-bottom: 8px; transition: 0.3s; }
+        .nav-link:hover, .nav-link.active { background: #3b82f6; color: #fff; }
+        .card { border-radius: 16px; border: none; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        #consola { background: #0f172a; color: #10b981; font-family: monospace; padding: 1rem; border-radius: 12px; height: 350px; overflow-y: auto; font-size: 0.8rem; }
+        .status-pill { padding: 4px 12px; border-radius: 20px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; }
+        .pill-open { background: #eff6ff; color: #1d4ed8; }
+        .pill-closed { background: #f0fdf4; color: #15803d; }
+        .pill-loading { background: #fffbeb; color: #b45309; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 50% { opacity: 0.5; } }
     </style>
 </head>
 <body>
     <input type="hidden" id="csrfToken" value="<?php echo $_SESSION['csrf_token']; ?>">
-
     <div class="sidebar">
-        <div class="px-3 mb-5">
-            <h4 class="fw-bold m-0"><i class="bi bi-rocket-takeoff-fill text-primary me-2"></i>SGL PRO</h4>
-        </div>
+        <h4 class="fw-bold mb-5 px-3 text-primary">SGL PRO</h4>
         <nav class="nav flex-column">
-            <a class="nav-link <?php echo $pagina == 'panel' ? 'active' : ''; ?>" href="?action=panel">
-                <i class="bi bi-grid-fill me-3"></i> Dashboard
-            </a>
-            <a class="nav-link <?php echo $pagina == 'envios' ? 'active' : ''; ?>" href="?action=envios">
-                <i class="bi bi-truck me-3"></i> Envíos
-            </a>
-            <a class="nav-link <?php echo $pagina == 'ajustes' ? 'active' : ''; ?>" href="?action=ajustes">
-                <i class="bi bi-gear-fill me-3"></i> Ajustes
-            </a>
-            <div style="margin-top: 4rem"></div>
-            <a class="nav-link text-danger" href="?action=salir"><i class="bi bi-power me-3"></i> Salir</a>
+            <a class="nav-link <?php echo $pagina == 'panel' ? 'active' : ''; ?>" href="?action=panel"><i class="bi bi-grid-fill me-3"></i> Dashboard</a>
+            <a class="nav-link <?php echo $pagina == 'envios' ? 'active' : ''; ?>" href="?action=envios"><i class="bi bi-truck me-3"></i> Envíos</a>
+            <a class="nav-link <?php echo $pagina == 'bd' ? 'active' : ''; ?>" href="?action=bd"><i class="bi bi-database-fill me-3"></i> Base de Datos</a>
+            <a class="nav-link <?php echo $pagina == 'ajustes' ? 'active' : ''; ?>" href="?action=ajustes"><i class="bi bi-gear-fill me-3"></i> Ajustes</a>
+            <a class="nav-link text-danger mt-5" href="?action=salir"><i class="bi bi-power me-3"></i> Salir</a>
         </nav>
     </div>
 
-    <div class="main-content">
-        <div class="d-flex justify-content-between align-items-center mb-4">
+    <div class="main">
+        <div class="d-flex justify-content-between align-items-center mb-5">
             <div>
-                <h2 class="fw-bold m-0"><?php echo ($pagina == 'panel' ? 'Panel de Control' : ($pagina == 'envios' ? 'Rutas de Envío' : 'Ajustes')); ?></h2>
-                <span class="badge bg-primary-subtle text-primary border border-primary-subtle mt-1"><?php echo $modo; ?></span>
+                <h2 class="fw-bold m-0"><?php echo ucfirst($pagina == 'panel' ? 'Panel de Control' : ($pagina == 'envios' ? 'Gestión' : ($pagina == 'bd' ? 'Base de Datos' : 'Configuración'))); ?></h2>
+                <span class="badge bg-primary-subtle text-primary mt-1"><?php echo $modo; ?></span>
             </div>
-            <?php if ($pagina == 'panel' || $pagina == 'envios'): ?>
             <div class="d-flex gap-2">
-                <select id="selectIntervalo" class="form-select" style="width: 180px; font-size: 0.9rem;">
-                    <option value="0" <?php echo $ajustes['intervalo_defecto'] == 0 ? 'selected' : ''; ?>>Cierre Turbo</option>
-                    <option value="15" <?php echo $ajustes['intervalo_defecto'] == 15 ? 'selected' : ''; ?>>Frecuencia 15s</option>
-                    <option value="30" <?php echo $ajustes['intervalo_defecto'] == 30 ? 'selected' : ''; ?>>Frecuencia 30s</option>
-                </select>
-                <button id="btnCierreMasivo" class="btn btn-primary fw-bold px-4 shadow-sm" style="font-size: 0.9rem;">Cerrar Automático</button>
+                <button onclick="exportarExcel()" class="btn btn-success fw-bold"><i class="bi bi-file-earmark-excel me-2"></i>Excel</button>
+                <button onclick="exportarTXT()" class="btn btn-secondary fw-bold"><i class="bi bi-file-earmark-text me-2"></i>TXT</button>
+                <button onclick="guardarEnBD()" class="btn btn-dark fw-bold"><i class="bi bi-cloud-arrow-up me-2"></i>Guardar en BD</button>
+                <?php if ($pagina == 'panel'): ?>
+                <button id="btnBulk" onclick="cierreMasivo()" class="btn btn-primary fw-bold"><i class="bi bi-rocket-takeoff me-2"></i>Cierre Automático</button>
+                <?php endif; ?>
             </div>
-            <?php endif; ?>
         </div>
 
-        <?php if ($pagina == 'panel'): ?>
+        <?php if ($pagina == 'panel' || $pagina == 'envios'): ?>
         <div class="row">
             <div class="col-lg-8">
-                <div class="card p-0 overflow-hidden shadow-sm">
+                <div class="card overflow-hidden">
                     <table class="table table-hover align-middle mb-0">
                         <thead class="bg-light">
                             <tr>
-                                <th width="40" class="ps-4"><input type="checkbox" id="seleccionarTodo" class="form-check-input"></th>
-                                <th>ID</th>
-                                <th>Comprador / Dirección</th>
+                                <th width="40" class="ps-4"><input type="checkbox" id="selectAll" class="form-check-input"></th>
+                                <th>ID Envío</th>
+                                <th>Comprador</th>
                                 <th>Estado</th>
-                                <th>Acción</th>
+                                <?php if ($pagina == 'panel'): ?><th>Acción</th><?php endif; ?>
                             </tr>
                         </thead>
                         <tbody id="tablaPedidos"></tbody>
@@ -351,292 +353,195 @@ function renderizarInterfaz($config, $pagina) {
                 </div>
             </div>
             <div class="col-lg-4">
-                <h6 class="fw-bold mb-3"><i class="bi bi-terminal-fill me-2"></i>Monitor en Tiempo Real</h6>
+                <h6 class="fw-bold mb-3">Monitor de Auditoría</h6>
                 <div id="consola">> Listo.</div>
             </div>
         </div>
 
-        <?php elseif ($pagina == 'envios'): ?>
-        <div class="d-flex gap-2 mb-4">
-            <button class="btn-filter active" id="filter-all">Todos</button>
-            <button class="btn-filter" id="filter-abiertas">Operaciones ABIERTAS</button>
-            <button class="btn-filter" id="filter-cerradas">Operaciones CERRADAS</button>
-        </div>
-        <div class="card shadow-sm p-0 overflow-hidden">
+        <?php elseif ($pagina == 'bd'): ?>
+        <div class="card overflow-hidden">
             <table class="table table-hover align-middle mb-0">
                 <thead class="bg-light">
                     <tr>
-                        <th width="40" class="ps-4"><input type="checkbox" id="seleccionarTodo" class="form-check-input"></th>
-                        <th>ID</th>
+                        <th width="40" class="ps-4"><input type="checkbox" id="selectAll" class="form-check-input"></th>
+                        <th>ID MELI</th>
                         <th>Comprador</th>
-                        <th>Dirección de Entrega</th>
-                        <th>Estado Logístico</th>
-                        <th>Coordenadas</th>
+                        <th>Dirección</th>
+                        <th>Estado</th>
+                        <th>Fecha</th>
                     </tr>
                 </thead>
-                <tbody id="tablaHistorial"></tbody>
+                <tbody id="tablaBD"></tbody>
             </table>
         </div>
 
         <?php elseif ($pagina == 'ajustes'): ?>
-        <div class="row">
-            <div class="col-lg-7">
-                <div class="card p-4 shadow-sm">
-                    <h5 class="fw-bold mb-4">Ajustes Técnicos</h5>
-                    <form id="formularioAjustes">
-                        <div class="mb-4">
-                            <label class="form-label fw-bold small">Intervalo entre cierres (segundos)</label>
-                            <input type="number" name="intervalo_defecto" class="form-control" value="<?php echo $ajustes['intervalo_defecto']; ?>">
-                        </div>
-                        <div class="mb-4 form-check form-switch">
-                            <input class="form-check-input" type="checkbox" name="sincronizacion_auto" <?php echo $ajustes['sincronizacion_auto'] ? 'checked' : ''; ?>>
-                            <label class="form-check-label small fw-bold">Actualizar automáticamente al iniciar</label>
-                        </div>
-                        <button type="submit" class="btn btn-primary w-100 fw-bold py-2">Guardar Cambios</button>
-                    </form>
-                    <hr class="my-4">
-                    <div class="bg-light p-3 rounded-3">
-                        <h6 class="fw-bold small text-uppercase"><i class="bi bi-code-square me-2"></i>API Mercado Libre</h6>
-                        <p class="small text-muted m-0">Para operar en modo real, configure las variables en el servidor:</p>
-                        <code class="small d-block mt-2">MELI_CLIENT_ID<br>MELI_CLIENT_SECRET</code>
-                    </div>
+        <div class="card p-4">
+            <h5 class="fw-bold mb-4">Ajustes Generales</h5>
+            <form id="formAjustes">
+                <div class="mb-3">
+                    <label class="form-label fw-bold small">Intervalo entre cierres masivos (segundos)</label>
+                    <input type="number" name="intervalo_defecto" class="form-control" value="<?php echo $ajustes['intervalo_defecto']; ?>">
                 </div>
-            </div>
-            <div class="col-lg-5">
-                <div class="card p-4 bg-primary text-white shadow-sm border-0">
-                    <h6 class="fw-bold mb-3"><i class="bi bi-shield-lock-fill me-2"></i>Bypass GPS Activo</h6>
-                    <p class="small opacity-75">SGL PRO inyecta las coordenadas reales del domicilio del comprador en cada cierre. Esto evita alertas de geolocalización y permite operar desde cualquier lugar.</p>
-                </div>
-            </div>
+                <button type="submit" class="btn btn-primary fw-bold px-4">Guardar Cambios</button>
+            </form>
         </div>
         <?php endif; ?>
     </div>
 
     <script>
-        const TOKEN_CSRF = document.getElementById('csrfToken').value;
-        let todosLosPedidos = [];
+        const CSRF = document.getElementById('csrfToken').value;
+        const INTERVALO = <?php echo $ajustes['intervalo_defecto']; ?>;
+        let pedidosActuales = [];
 
-        document.addEventListener('DOMContentLoaded', () => {
-            if (document.getElementById('tablaPedidos') || document.getElementById('tablaHistorial')) cargarPedidos();
+        async function cargarDatos() {
+            const endpoint = '<?php echo $pagina == "bd" ? "?action=obtener_bd" : "?action=obtener_pedidos"; ?>';
+            const res = await fetch(endpoint);
+            pedidosActuales = await res.json();
+            renderTablas();
+        }
 
-            document.body.addEventListener('change', e => {
-                if (e.target.id === 'seleccionarTodo') {
-                    document.querySelectorAll('.pedido-check').forEach(c => { if(!c.disabled) c.checked = e.target.checked; });
-                }
+        function renderTablas() {
+            const tbody = document.getElementById('tablaPedidos') || document.getElementById('tablaBD');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+
+            pedidosActuales.forEach(p => {
+                const tr = document.createElement('tr');
+                const id = p.id || p.id_meli;
+                const status = p.estado;
+
+                tr.innerHTML = `
+                    <td class="ps-4"><input type="checkbox" class="check-p form-check-input" value="${id}"></td>
+                    <td class="fw-bold text-primary">#${id}</td>
+                    <td><div class="small fw-bold">${p.comprador}</div><div class="small text-muted">${p.destino || p.direccion}</div></td>
+                    <td><span id="st-${id}" class="status-pill ${status === 'shipped' ? 'pill-open' : 'pill-closed'}">${status === 'shipped' ? 'ABIERTA' : 'CERRADA'}</span></td>
+                    ${'<?php echo $pagina; ?>' == 'panel' && status == 'shipped' ? `<td><button onclick="cerrarPed(${id})" class="btn btn-sm btn-outline-primary fw-bold">Cerrar</button></td>` : ''}
+                    ${'<?php echo $pagina; ?>' == 'bd' ? `<td><small class="text-muted">${p.fecha_registro}</small></td>` : ''}
+                `;
+                tbody.appendChild(tr);
             });
-
-            if (document.getElementById('btnCierreMasivo')) {
-                document.getElementById('btnCierreMasivo').addEventListener('click', cierreMasivo);
-            }
-
-            if (document.getElementById('filter-all')) document.getElementById('filter-all').onclick = () => filtrarPedidos('todos');
-            if (document.getElementById('filter-abiertas')) document.getElementById('filter-abiertas').onclick = () => filtrarPedidos('shipped');
-            if (document.getElementById('filter-cerradas')) document.getElementById('filter-cerradas').onclick = () => filtrarPedidos('delivered');
-
-            if (document.getElementById('formularioAjustes')) {
-                document.getElementById('formularioAjustes').addEventListener('submit', async (e) => {
-                    e.preventDefault();
-                    const fd = new FormData(e.target);
-                    const ajustes = {
-                        intervalo_defecto: fd.get('intervalo_defecto'),
-                        sincronizacion_auto: fd.get('sincronizacion_auto') === 'on'
-                    };
-                    const r = await fetch('?action=guardar_ajustes', {
-                        method: 'POST',
-                        body: JSON.stringify({ ajustes })
-                    });
-                    if ((await r.json()).success) alert('¡Ajustes guardados!');
-                });
-            }
-        });
-
-        function registrarLog(msg, tipo = 'info') {
-            const cons = document.getElementById('consola');
-            if (!cons) return;
-            const d = document.createElement('div');
-            d.style.color = tipo === 'error' ? '#ef4444' : (tipo === 'success' ? '#10b981' : '#94a3b8');
-            d.textContent = `[${new Date().toLocaleTimeString()}] > ${msg}`;
-            cons.appendChild(d);
-            cons.scrollTop = cons.scrollHeight;
-        }
-
-        async function cargarPedidos() {
-            try {
-                const r = await fetch('?action=obtener_pedidos');
-                todosLosPedidos = await r.json();
-                renderizarTablas(todosLosPedidos);
-            } catch (e) {
-                registrarLog('Error al conectar con el servidor.', 'error');
-            }
-        }
-
-        function renderizarTablas(pedidos) {
-            const tCuerpo = document.getElementById('tablaPedidos');
-            const tHistorial = document.getElementById('tablaHistorial');
-
-            if (tCuerpo) {
-                tCuerpo.innerHTML = '';
-                pedidos.filter(p => p.estado === 'shipped').forEach(p => {
-                    const tr = document.createElement('tr');
-
-                    const tdCheck = document.createElement('td');
-                    tdCheck.className = 'ps-4';
-                    const input = document.createElement('input');
-                    input.type = 'checkbox';
-                    input.className = 'pedido-check form-check-input';
-                    input.value = p.id;
-                    tdCheck.appendChild(input);
-
-                    const tdId = document.createElement('td');
-                    tdId.className = 'fw-bold text-primary';
-                    tdId.textContent = `#${p.id}`;
-
-                    const tdInfo = document.createElement('td');
-                    const divBuyer = document.createElement('div');
-                    divBuyer.className = 'small fw-bold';
-                    divBuyer.textContent = p.comprador;
-                    const divDest = document.createElement('div');
-                    divDest.className = 'text-muted small';
-                    divDest.textContent = p.destino;
-                    tdInfo.appendChild(divBuyer);
-                    tdInfo.appendChild(divDest);
-
-                    const tdEstado = document.createElement('td');
-                    const span = document.createElement('span');
-                    span.id = `estado-${p.id}`;
-                    span.className = 'status-pill pill-abierta';
-                    span.textContent = 'ABIERTA';
-                    tdEstado.appendChild(span);
-
-                    const tdAccion = document.createElement('td');
-                    const btn = document.createElement('button');
-                    btn.className = 'btn btn-sm btn-outline-primary rounded-pill px-3 fw-bold';
-                    btn.textContent = 'Cerrar';
-                    btn.onclick = () => cerrarIndividual(p.id);
-                    tdAccion.appendChild(btn);
-
-                    tr.appendChild(tdCheck);
-                    tr.appendChild(tdId);
-                    tr.appendChild(tdInfo);
-                    tr.appendChild(tdEstado);
-                    tr.appendChild(tdAccion);
-                    tCuerpo.appendChild(tr);
-                });
-            }
-
-            if (tHistorial) {
-                tHistorial.innerHTML = '';
-                pedidos.forEach(p => {
-                    const tr = document.createElement('tr');
-
-                    const tdCheck = document.createElement('td');
-                    tdCheck.className = 'ps-4';
-                    const input = document.createElement('input');
-                    input.type = 'checkbox';
-                    input.className = 'pedido-check form-check-input';
-                    input.value = p.id;
-                    if(p.estado === 'delivered') input.disabled = true;
-                    tdCheck.appendChild(input);
-
-                    const tdId = document.createElement('td');
-                    tdId.className = 'fw-bold';
-                    tdId.textContent = `#${p.id}`;
-
-                    const tdBuyer = document.createElement('td');
-                    tdBuyer.className = 'small';
-                    tdBuyer.textContent = p.comprador;
-
-                    const tdDest = document.createElement('td');
-                    tdDest.className = 'small text-secondary';
-                    tdDest.textContent = p.destino;
-
-                    const tdEstado = document.createElement('td');
-                    const span = document.createElement('span');
-                    span.id = `estado-h-${p.id}`;
-                    span.className = `status-pill pill-${p.estado === 'shipped' ? 'abierta' : 'cerrada'}`;
-                    span.textContent = p.estado === 'shipped' ? 'ABIERTA' : 'CERRADA';
-                    tdEstado.appendChild(span);
-
-                    const tdGps = document.createElement('td');
-                    const code = document.createElement('code');
-                    code.className = 'small';
-                    code.textContent = `${parseFloat(p.lat).toFixed(4)}, ${parseFloat(p.lon).toFixed(4)}`;
-                    tdGps.appendChild(code);
-
-                    tr.appendChild(tdCheck);
-                    tr.appendChild(tdId);
-                    tr.appendChild(tdBuyer);
-                    tr.appendChild(tdDest);
-                    tr.appendChild(tdEstado);
-                    tr.appendChild(tdGps);
-                    tHistorial.appendChild(tr);
-                });
-            }
-        }
-
-        function filtrarPedidos(filtro) {
-            document.querySelectorAll('.btn-filter').forEach(b => b.classList.remove('active'));
-            if(filtro === 'todos') document.getElementById('filter-all').classList.add('active');
-            if(filtro === 'shipped') document.getElementById('filter-abiertas').classList.add('active');
-            if(filtro === 'delivered') document.getElementById('filter-cerradas').classList.add('active');
-
-            if (filtro === 'todos') renderizarTablas(todosLosPedidos);
-            else renderizarTablas(todosLosPedidos.filter(p => p.estado === filtro));
-        }
-
-        async function cerrarIndividual(id) {
-            registrarLog(`Iniciando cierre del envío #${id}...`);
-            await procesarCierre(id);
         }
 
         async function procesarCierre(id) {
-            const els = [document.getElementById(`estado-${id}`), document.getElementById(`estado-h-${id}`)];
-            els.forEach(el => { if(el) { el.className = 'status-pill pill-procesando'; el.textContent = 'CERRANDO...'; } });
+            const st = document.getElementById(`st-${id}`);
+            if (st) { st.className = 'status-pill pill-loading'; st.textContent = 'PROCESANDO...'; }
 
-            try {
-                const r = await fetch('?action=cerrar_individual', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ id, csrf_token: TOKEN_CSRF })
-                });
-                const resultado = await r.json();
-                if (resultado.success) {
-                    els.forEach(el => { if(el) { el.className = 'status-pill pill-cerrada'; el.textContent = 'CERRADA'; } });
-                    registrarLog(`Envío #${id} CERRADO correctamente.`, 'success');
-                    const p = todosLosPedidos.find(x => x.id == id);
-                    if (p) p.estado = 'delivered';
-                } else {
-                    els.forEach(el => { if(el) { el.className = 'status-pill bg-danger text-white'; el.textContent = 'ERROR'; } });
-                    registrarLog(`Error en #${id}.`, 'error');
-                }
-            } catch (e) {
-                registrarLog(`Fallo crítico en #${id}`, 'error');
+            const res = await fetch('?action=cerrar_individual', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id, csrf_token: CSRF })
+            });
+            const r = await res.json();
+            if (r.success) {
+                if (st) { st.className = 'status-pill pill-closed'; st.textContent = 'CERRADA'; }
+                log(`Envío #${id} CERRADO correctamente.`, 'success');
+            } else {
+                if (st) { st.className = 'status-pill bg-danger text-white'; st.textContent = 'ERROR'; }
+                log(`Error en #${id}: ${r.message}`, 'error');
             }
+            return r.success;
+        }
+
+        async function cerrarPed(id) {
+            log(`Iniciando cierre individual de #${id}...`);
+            await procesarCierre(id);
         }
 
         async function cierreMasivo() {
-            const ids = Array.from(document.querySelectorAll('.pedido-check:checked:not(:disabled)')).map(c => c.value);
-            if (!ids.length) return alert('Seleccione operaciones ABIERTAS.');
-            const intervalo = parseInt(document.getElementById('selectIntervalo').value);
+            const ids = Array.from(document.querySelectorAll('.check-p:checked')).map(c => c.value);
+            if (!ids.length) return alert('Seleccione pedidos abiertos.');
 
-            if (!confirm(`Se cerrarán ${ids.length} operaciones. ¿Continuar?`)) return;
+            if (!confirm(`Se cerrarán ${ids.length} pedidos secuencialmente. ¿Desea continuar?`)) return;
 
-            const btn = document.getElementById('btnCierreMasivo');
+            const btn = document.getElementById('btnBulk');
             btn.disabled = true;
-            registrarLog(`Iniciando proceso masivo (${ids.length} pedidos)...`);
+            log(`Iniciando cierre masivo de ${ids.length} pedidos...`);
 
             for (let i = 0; i < ids.length; i++) {
                 await procesarCierre(ids[i]);
-                if (i < ids.length - 1 && intervalo > 0) {
-                    registrarLog(`Pausa de seguridad: ${intervalo}s...`);
-                    await new Promise(res => setTimeout(res, intervalo * 1000));
+                if (i < ids.length - 1 && INTERVALO > 0) {
+                    log(`Espera de seguridad: ${INTERVALO}s...`);
+                    await new Promise(r => setTimeout(r, INTERVALO * 1000));
                 }
             }
-
             btn.disabled = false;
-            registrarLog('Proceso finalizado.', 'success');
-            setTimeout(() => renderizarTablas(todosLosPedidos), 1000);
+            log('Operación masiva finalizada.', 'success');
         }
+
+        async function guardarEnBD() {
+            const seleccionados = getSeleccionados();
+            if (!seleccionados.length) return alert('Seleccione pedidos.');
+
+            log(`Guardando ${seleccionados.length} registros en BD...`);
+            const res = await fetch('?action=guardar_bd', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ pedidos: seleccionados, csrf_token: CSRF })
+            });
+            const r = await res.json();
+            if (r.success) log(r.message, 'success');
+            else log(r.message, 'error');
+        }
+
+        function getSeleccionados() {
+            const checks = document.querySelectorAll('.check-p:checked');
+            const ids = Array.from(checks).map(c => c.value);
+            return pedidosActuales.filter(p => ids.includes(String(p.id || p.id_meli)));
+        }
+
+        function exportarExcel() {
+            const items = getSeleccionados();
+            if (!items.length) return alert('Seleccione pedidos.');
+            let csv = 'ID MELI;COMPRADOR;DIRECCION;ESTADO;LAT;LON\n';
+            items.forEach(p => { csv += `${p.id || p.id_meli};${p.comprador};${p.destino || p.direccion};${p.estado};${p.lat || p.latitud};${p.lon || p.longitud}\n`; });
+            descargarArchivo(csv, 'sgl_pro_auditoria.csv', 'text/csv');
+        }
+
+        function exportarTXT() {
+            const items = getSeleccionados();
+            if (!items.length) return alert('Seleccione pedidos.');
+            let txt = 'REPORTE SGL PRO\n' + '-'.repeat(30) + '\n';
+            items.forEach(p => { txt += `#${p.id || p.id_meli} | ${p.comprador} | ${p.estado}\n`; });
+            descargarArchivo(txt, 'sgl_pro_auditoria.txt', 'text/plain');
+        }
+
+        function descargarArchivo(cont, nom, tipo) {
+            const blob = new Blob([cont], { type: tipo });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = nom; a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function log(msg, type = 'info') {
+            const c = document.getElementById('consola');
+            if (!c) return;
+            const d = document.createElement('div');
+            d.style.color = type === 'success' ? '#10b981' : (type === 'error' ? '#ef4444' : '#94a3b8');
+            d.textContent = `[${new Date().toLocaleTimeString()}] > ${msg}`;
+            c.appendChild(d);
+            c.scrollTop = c.scrollHeight;
+        }
+
+        if (document.getElementById('formAjustes')) {
+            document.getElementById('formAjustes').onsubmit = async (e) => {
+                e.preventDefault();
+                const ajustes = { intervalo_defecto: new FormData(e.target).get('intervalo_defecto') };
+                const res = await fetch('?action=guardar_ajustes', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ ajustes, csrf_token: CSRF })
+                });
+                if ((await res.json()).success) alert('¡Ajustes guardados!');
+            };
+        }
+
+        document.getElementById('selectAll').addEventListener('change', e => {
+            document.querySelectorAll('.check-p').forEach(c => c.checked = e.target.checked);
+        });
+
+        cargarDatos();
     </script>
 </body>
 </html>
