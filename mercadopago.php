@@ -3,7 +3,7 @@
  * SGL PRO ENTERPRISE - Sistema de Gestión Logística SaaS
  * Solución de Bypass GPS para Mercado Libre Flex
  *
- * Versión: 2.7 Pro (Control Total de Estados y Filtros Dinámicos)
+ * Versión: 2.9 Final (OAuth Corregido, XSS Safe y Coherencia UI)
  * Consolidado en un único archivo mercadopago.php
  */
 
@@ -33,6 +33,11 @@ $config = [
     'redirect_uri'   => (isset($_SERVER['HTTPS']) ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . strtok($_SERVER["REQUEST_URI"], '?'),
 ];
 
+// --- DETECCIÓN AUTOMÁTICA DE CALLBACK OAUTH ---
+if (isset($_GET['code']) && !isset($_SESSION['access_token'])) {
+    manejarCallback($config);
+}
+
 // --- ENRUTADOR ---
 $accion = $_GET['action'] ?? 'inicio';
 
@@ -45,9 +50,6 @@ switch ($accion) {
         break;
     case 'guardar_ajustes':
         manejarGuardarAjustes();
-        break;
-    case 'callback':
-        manejarCallback($config);
         break;
     case 'demo':
         $_SESSION['es_demo'] = true;
@@ -138,10 +140,10 @@ function manejarCallback($config) {
         if ($res['estado'] == 200 && isset($res['datos']['access_token'])) {
             $_SESSION['access_token'] = $res['datos']['access_token'];
             $_SESSION['es_demo'] = false;
+            header('Location: mercadopago.php?action=panel');
+            exit;
         }
     }
-    header('Location: mercadopago.php?action=panel');
-    exit;
 }
 
 function manejarObtenerPedidos($config) {
@@ -235,21 +237,24 @@ function renderizarInicio($config) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SGL PRO | Inicio</title>
+    <title>SGL PRO | Enterprise Logistics</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { font-family: 'Segoe UI', system-ui; background: #0f172a; color: #fff; height: 100vh; display: flex; align-items: center; justify-content: center; overflow: hidden; }
         .hero-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); border-radius: 24px; padding: 4rem; text-align: center; max-width: 650px; }
         .btn-premium { background: #3b82f6; color: white; border: none; padding: 14px 40px; border-radius: 12px; font-weight: 700; text-decoration: none; display: inline-block; transition: 0.3s; }
         .btn-premium:hover { background: #2563eb; transform: scale(1.02); }
+        .btn-demo { background: transparent; border: 1px solid #475569; color: #94a3b8; padding: 14px 40px; border-radius: 12px; font-weight: 700; text-decoration: none; display: inline-block; margin-top: 1rem; transition: 0.3s; }
+        .btn-demo:hover { color: #fff; border-color: #94a3b8; }
     </style>
 </head>
 <body>
     <div class="hero-card shadow-lg">
         <h1 class="display-4 fw-bold mb-3">SGL PRO</h1>
-        <p class="lead text-secondary mb-5">Gestión logística profesional con automatización de cierres.</p>
+        <p class="lead text-secondary mb-5">Gestión logística avanzada con bypass GPS inteligente. Elija su modalidad de trabajo:</p>
         <div class="d-grid gap-2">
-            <a href="?action=demo" class="btn btn-premium">Iniciar Sistema (Demo)</a>
+            <a href="<?php echo htmlspecialchars($config['auth_url'] . "/authorization?response_type=code&client_id={$config['client_id']}&redirect_uri=" . urlencode($config['redirect_uri'])); ?>" class="btn btn-premium">Conectar Empresa Real</a>
+            <a href="?action=demo" class="btn btn-demo">Iniciar Modo Demo</a>
         </div>
     </div>
 </body>
@@ -295,9 +300,15 @@ function renderizarInterfaz($config, $pagina) {
             <h4 class="fw-bold m-0"><i class="bi bi-rocket-takeoff-fill text-primary me-2"></i>SGL PRO</h4>
         </div>
         <nav class="nav flex-column">
-            <a class="nav-link <?php echo $pagina == 'panel' ? 'active' : ''; ?>" href="?action=panel"><i class="bi bi-grid-fill me-3"></i> Panel de Control</a>
-            <a class="nav-link <?php echo $pagina == 'envios' ? 'active' : ''; ?>" href="?action=envios"><i class="bi bi-truck me-3"></i> Gestión de Envíos</a>
-            <a class="nav-link <?php echo $pagina == 'ajustes' ? 'active' : ''; ?>" href="?action=ajustes"><i class="bi bi-gear-fill me-3"></i> Ajustes</a>
+            <a class="nav-link <?php echo $pagina == 'panel' ? 'active' : ''; ?>" href="?action=panel">
+                <i class="bi bi-grid-fill me-3"></i> Dashboard
+            </a>
+            <a class="nav-link <?php echo $pagina == 'envios' ? 'active' : ''; ?>" href="?action=envios">
+                <i class="bi bi-truck me-3"></i> Envíos
+            </a>
+            <a class="nav-link <?php echo $pagina == 'ajustes' ? 'active' : ''; ?>" href="?action=ajustes">
+                <i class="bi bi-gear-fill me-3"></i> Ajustes
+            </a>
             <div style="margin-top: 4rem"></div>
             <a class="nav-link text-danger" href="?action=salir"><i class="bi bi-power me-3"></i> Salir</a>
         </nav>
@@ -306,17 +317,17 @@ function renderizarInterfaz($config, $pagina) {
     <div class="main-content">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <div>
-                <h2 class="fw-bold m-0"><?php echo ($pagina == 'panel' ? 'Panel Principal' : ($pagina == 'envios' ? 'Gestión de Operaciones' : 'Configuración')); ?></h2>
+                <h2 class="fw-bold m-0"><?php echo ($pagina == 'panel' ? 'Panel de Control' : ($pagina == 'envios' ? 'Rutas de Envío' : 'Ajustes')); ?></h2>
                 <span class="badge bg-primary-subtle text-primary border border-primary-subtle mt-1"><?php echo $modo; ?></span>
             </div>
             <?php if ($pagina == 'panel' || $pagina == 'envios'): ?>
             <div class="d-flex gap-2">
                 <select id="selectIntervalo" class="form-select" style="width: 180px; font-size: 0.9rem;">
                     <option value="0" <?php echo $ajustes['intervalo_defecto'] == 0 ? 'selected' : ''; ?>>Cierre Turbo</option>
-                    <option value="15" <?php echo $ajustes['intervalo_defecto'] == 15 ? 'selected' : ''; ?>>Espera 15s</option>
-                    <option value="30" <?php echo $ajustes['intervalo_defecto'] == 30 ? 'selected' : ''; ?>>Espera 30s</option>
+                    <option value="15" <?php echo $ajustes['intervalo_defecto'] == 15 ? 'selected' : ''; ?>>Frecuencia 15s</option>
+                    <option value="30" <?php echo $ajustes['intervalo_defecto'] == 30 ? 'selected' : ''; ?>>Frecuencia 30s</option>
                 </select>
-                <button id="btnCierreMasivo" class="btn btn-primary fw-bold px-4 shadow-sm" style="font-size: 0.9rem;">Cerrar Seleccionadas</button>
+                <button id="btnCierreMasivo" class="btn btn-primary fw-bold px-4 shadow-sm" style="font-size: 0.9rem;">Cerrar Automático</button>
             </div>
             <?php endif; ?>
         </div>
@@ -324,7 +335,7 @@ function renderizarInterfaz($config, $pagina) {
         <?php if ($pagina == 'panel'): ?>
         <div class="row">
             <div class="col-lg-8">
-                <div class="card p-0 overflow-hidden">
+                <div class="card p-0 overflow-hidden shadow-sm">
                     <table class="table table-hover align-middle mb-0">
                         <thead class="bg-light">
                             <tr>
@@ -340,16 +351,16 @@ function renderizarInterfaz($config, $pagina) {
                 </div>
             </div>
             <div class="col-lg-4">
-                <h6 class="fw-bold mb-3">Monitor en Tiempo Real</h6>
+                <h6 class="fw-bold mb-3"><i class="bi bi-terminal-fill me-2"></i>Monitor en Tiempo Real</h6>
                 <div id="consola">> Listo.</div>
             </div>
         </div>
 
         <?php elseif ($pagina == 'envios'): ?>
         <div class="d-flex gap-2 mb-4">
-            <button class="btn-filter active" onclick="filtrarPedidos('todos')">Todos</button>
-            <button class="btn-filter" onclick="filtrarPedidos('shipped')">Operaciones ABIERTAS</button>
-            <button class="btn-filter" onclick="filtrarPedidos('delivered')">Operaciones CERRADAS</button>
+            <button class="btn-filter active" id="filter-all">Todos</button>
+            <button class="btn-filter" id="filter-abiertas">Operaciones ABIERTAS</button>
+            <button class="btn-filter" id="filter-cerradas">Operaciones CERRADAS</button>
         </div>
         <div class="card shadow-sm p-0 overflow-hidden">
             <table class="table table-hover align-middle mb-0">
@@ -369,9 +380,9 @@ function renderizarInterfaz($config, $pagina) {
 
         <?php elseif ($pagina == 'ajustes'): ?>
         <div class="row">
-            <div class="col-lg-6">
-                <div class="card p-4">
-                    <h5 class="fw-bold mb-4">Ajustes del Sistema</h5>
+            <div class="col-lg-7">
+                <div class="card p-4 shadow-sm">
+                    <h5 class="fw-bold mb-4">Ajustes Técnicos</h5>
                     <form id="formularioAjustes">
                         <div class="mb-4">
                             <label class="form-label fw-bold small">Intervalo entre cierres (segundos)</label>
@@ -383,6 +394,18 @@ function renderizarInterfaz($config, $pagina) {
                         </div>
                         <button type="submit" class="btn btn-primary w-100 fw-bold py-2">Guardar Cambios</button>
                     </form>
+                    <hr class="my-4">
+                    <div class="bg-light p-3 rounded-3">
+                        <h6 class="fw-bold small text-uppercase"><i class="bi bi-code-square me-2"></i>API Mercado Libre</h6>
+                        <p class="small text-muted m-0">Para operar en modo real, configure las variables en el servidor:</p>
+                        <code class="small d-block mt-2">MELI_CLIENT_ID<br>MELI_CLIENT_SECRET</code>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-5">
+                <div class="card p-4 bg-primary text-white shadow-sm border-0">
+                    <h6 class="fw-bold mb-3"><i class="bi bi-shield-lock-fill me-2"></i>Bypass GPS Activo</h6>
+                    <p class="small opacity-75">SGL PRO inyecta las coordenadas reales del domicilio del comprador en cada cierre. Esto evita alertas de geolocalización y permite operar desde cualquier lugar.</p>
                 </div>
             </div>
         </div>
@@ -396,17 +419,19 @@ function renderizarInterfaz($config, $pagina) {
         document.addEventListener('DOMContentLoaded', () => {
             if (document.getElementById('tablaPedidos') || document.getElementById('tablaHistorial')) cargarPedidos();
 
-            if (document.getElementById('seleccionarTodo')) {
-                document.body.addEventListener('change', e => {
-                    if (e.target.id === 'seleccionarTodo') {
-                        document.querySelectorAll('.pedido-check').forEach(c => c.checked = e.target.checked);
-                    }
-                });
-            }
+            document.body.addEventListener('change', e => {
+                if (e.target.id === 'seleccionarTodo') {
+                    document.querySelectorAll('.pedido-check').forEach(c => { if(!c.disabled) c.checked = e.target.checked; });
+                }
+            });
 
             if (document.getElementById('btnCierreMasivo')) {
                 document.getElementById('btnCierreMasivo').addEventListener('click', cierreMasivo);
             }
+
+            if (document.getElementById('filter-all')) document.getElementById('filter-all').onclick = () => filtrarPedidos('todos');
+            if (document.getElementById('filter-abiertas')) document.getElementById('filter-abiertas').onclick = () => filtrarPedidos('shipped');
+            if (document.getElementById('filter-cerradas')) document.getElementById('filter-cerradas').onclick = () => filtrarPedidos('delivered');
 
             if (document.getElementById('formularioAjustes')) {
                 document.getElementById('formularioAjustes').addEventListener('submit', async (e) => {
@@ -453,13 +478,48 @@ function renderizarInterfaz($config, $pagina) {
                 tCuerpo.innerHTML = '';
                 pedidos.filter(p => p.estado === 'shipped').forEach(p => {
                     const tr = document.createElement('tr');
-                    tr.innerHTML = `
-                        <td class="ps-4"><input type="checkbox" class="pedido-check form-check-input" value="${p.id}"></td>
-                        <td class="fw-bold text-primary">#${p.id}</td>
-                        <td><div class="small fw-bold">${p.comprador}</div><div class="text-muted small">${p.destino}</div></td>
-                        <td><span id="estado-${p.id}" class="status-pill pill-abierta">ABIERTA</span></td>
-                        <td><button onclick="cerrarIndividual(${p.id})" class="btn btn-sm btn-outline-primary rounded-pill px-3 fw-bold">Cerrar</button></td>
-                    `;
+
+                    const tdCheck = document.createElement('td');
+                    tdCheck.className = 'ps-4';
+                    const input = document.createElement('input');
+                    input.type = 'checkbox';
+                    input.className = 'pedido-check form-check-input';
+                    input.value = p.id;
+                    tdCheck.appendChild(input);
+
+                    const tdId = document.createElement('td');
+                    tdId.className = 'fw-bold text-primary';
+                    tdId.textContent = `#${p.id}`;
+
+                    const tdInfo = document.createElement('td');
+                    const divBuyer = document.createElement('div');
+                    divBuyer.className = 'small fw-bold';
+                    divBuyer.textContent = p.comprador;
+                    const divDest = document.createElement('div');
+                    divDest.className = 'text-muted small';
+                    divDest.textContent = p.destino;
+                    tdInfo.appendChild(divBuyer);
+                    tdInfo.appendChild(divDest);
+
+                    const tdEstado = document.createElement('td');
+                    const span = document.createElement('span');
+                    span.id = `estado-${p.id}`;
+                    span.className = 'status-pill pill-abierta';
+                    span.textContent = 'ABIERTA';
+                    tdEstado.appendChild(span);
+
+                    const tdAccion = document.createElement('td');
+                    const btn = document.createElement('button');
+                    btn.className = 'btn btn-sm btn-outline-primary rounded-pill px-3 fw-bold';
+                    btn.textContent = 'Cerrar';
+                    btn.onclick = () => cerrarIndividual(p.id);
+                    tdAccion.appendChild(btn);
+
+                    tr.appendChild(tdCheck);
+                    tr.appendChild(tdId);
+                    tr.appendChild(tdInfo);
+                    tr.appendChild(tdEstado);
+                    tr.appendChild(tdAccion);
                     tCuerpo.appendChild(tr);
                 });
             }
@@ -468,14 +528,47 @@ function renderizarInterfaz($config, $pagina) {
                 tHistorial.innerHTML = '';
                 pedidos.forEach(p => {
                     const tr = document.createElement('tr');
-                    tr.innerHTML = `
-                        <td class="ps-4"><input type="checkbox" class="pedido-check form-check-input" value="${p.id}" ${p.estado === 'delivered' ? 'disabled' : ''}></td>
-                        <td class="fw-bold">#${p.id}</td>
-                        <td class="small">${p.comprador}</td>
-                        <td class="small text-secondary">${p.destino}</td>
-                        <td><span id="estado-h-${p.id}" class="status-pill pill-${p.estado === 'shipped' ? 'abierta' : 'cerrada'}">${p.estado === 'shipped' ? 'ABIERTA' : 'CERRADA'}</span></td>
-                        <td><code class="small">${parseFloat(p.lat).toFixed(4)}, ${parseFloat(p.lon).toFixed(4)}</code></td>
-                    `;
+
+                    const tdCheck = document.createElement('td');
+                    tdCheck.className = 'ps-4';
+                    const input = document.createElement('input');
+                    input.type = 'checkbox';
+                    input.className = 'pedido-check form-check-input';
+                    input.value = p.id;
+                    if(p.estado === 'delivered') input.disabled = true;
+                    tdCheck.appendChild(input);
+
+                    const tdId = document.createElement('td');
+                    tdId.className = 'fw-bold';
+                    tdId.textContent = `#${p.id}`;
+
+                    const tdBuyer = document.createElement('td');
+                    tdBuyer.className = 'small';
+                    tdBuyer.textContent = p.comprador;
+
+                    const tdDest = document.createElement('td');
+                    tdDest.className = 'small text-secondary';
+                    tdDest.textContent = p.destino;
+
+                    const tdEstado = document.createElement('td');
+                    const span = document.createElement('span');
+                    span.id = `estado-h-${p.id}`;
+                    span.className = `status-pill pill-${p.estado === 'shipped' ? 'abierta' : 'cerrada'}`;
+                    span.textContent = p.estado === 'shipped' ? 'ABIERTA' : 'CERRADA';
+                    tdEstado.appendChild(span);
+
+                    const tdGps = document.createElement('td');
+                    const code = document.createElement('code');
+                    code.className = 'small';
+                    code.textContent = `${parseFloat(p.lat).toFixed(4)}, ${parseFloat(p.lon).toFixed(4)}`;
+                    tdGps.appendChild(code);
+
+                    tr.appendChild(tdCheck);
+                    tr.appendChild(tdId);
+                    tr.appendChild(tdBuyer);
+                    tr.appendChild(tdDest);
+                    tr.appendChild(tdEstado);
+                    tr.appendChild(tdGps);
                     tHistorial.appendChild(tr);
                 });
             }
@@ -483,12 +576,12 @@ function renderizarInterfaz($config, $pagina) {
 
         function filtrarPedidos(filtro) {
             document.querySelectorAll('.btn-filter').forEach(b => b.classList.remove('active'));
-            event.target.classList.add('active');
-            if (filtro === 'todos') {
-                renderizarTablas(todosLosPedidos);
-            } else {
-                renderizarTablas(todosLosPedidos.filter(p => p.estado === filtro));
-            }
+            if(filtro === 'todos') document.getElementById('filter-all').classList.add('active');
+            if(filtro === 'shipped') document.getElementById('filter-abiertas').classList.add('active');
+            if(filtro === 'delivered') document.getElementById('filter-cerradas').classList.add('active');
+
+            if (filtro === 'todos') renderizarTablas(todosLosPedidos);
+            else renderizarTablas(todosLosPedidos.filter(p => p.estado === filtro));
         }
 
         async function cerrarIndividual(id) {
@@ -514,7 +607,7 @@ function renderizarInterfaz($config, $pagina) {
                     if (p) p.estado = 'delivered';
                 } else {
                     els.forEach(el => { if(el) { el.className = 'status-pill bg-danger text-white'; el.textContent = 'ERROR'; } });
-                    registrarLog(`Error en #${id}: ${resultado.message}`, 'error');
+                    registrarLog(`Error en #${id}.`, 'error');
                 }
             } catch (e) {
                 registrarLog(`Fallo crítico en #${id}`, 'error');
@@ -523,14 +616,14 @@ function renderizarInterfaz($config, $pagina) {
 
         async function cierreMasivo() {
             const ids = Array.from(document.querySelectorAll('.pedido-check:checked:not(:disabled)')).map(c => c.value);
-            if (!ids.length) return alert('Seleccione al menos una operación ABIERTA.');
+            if (!ids.length) return alert('Seleccione operaciones ABIERTAS.');
             const intervalo = parseInt(document.getElementById('selectIntervalo').value);
 
-            if (!confirm(`Se ejecutarán ${ids.length} cierres automáticos. ¿Continuar?`)) return;
+            if (!confirm(`Se cerrarán ${ids.length} operaciones. ¿Continuar?`)) return;
 
             const btn = document.getElementById('btnCierreMasivo');
             btn.disabled = true;
-            registrarLog(`Iniciando cierre masivo de ${ids.length} operaciones...`);
+            registrarLog(`Iniciando proceso masivo (${ids.length} pedidos)...`);
 
             for (let i = 0; i < ids.length; i++) {
                 await procesarCierre(ids[i]);
@@ -541,7 +634,7 @@ function renderizarInterfaz($config, $pagina) {
             }
 
             btn.disabled = false;
-            registrarLog('Proceso masivo finalizado.', 'success');
+            registrarLog('Proceso finalizado.', 'success');
             setTimeout(() => renderizarTablas(todosLosPedidos), 1000);
         }
     </script>
