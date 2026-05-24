@@ -4,7 +4,7 @@
  * Mercado Libre Flex GPS Bypass Solution
  *
  * Version: 2.1 Premium (Secured & Fully Functional)
- * Consolidado en un único archivo index.php
+ * Consolidado en un único archivo mercadopago.php
  */
 
 session_start();
@@ -36,15 +36,15 @@ switch ($action) {
     case 'demo':
         $_SESSION['is_demo'] = true;
         $_SESSION['access_token'] = 'demo_token_' . time();
-        header('Location: index.php?action=dashboard');
+        header('Location: mercadopago.php?action=dashboard');
         exit;
     case 'logout':
         session_destroy();
-        header('Location: index.php');
+        header('Location: mercadopago.php');
         exit;
     case 'dashboard':
         if (!isset($_SESSION['access_token'])) {
-            header('Location: index.php');
+            header('Location: mercadopago.php');
             exit;
         }
         renderDashboard($config);
@@ -110,11 +110,11 @@ function handleCallback($config) {
         } else {
             // Error en la autenticación real
             $_SESSION['auth_error'] = $res['data']['message'] ?? 'Error desconocido en OAuth';
-            header('Location: index.php');
+            header('Location: mercadopago.php');
             exit;
         }
     }
-    header('Location: index.php?action=dashboard');
+    header('Location: mercadopago.php?action=dashboard');
     exit;
 }
 
