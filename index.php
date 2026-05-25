@@ -6,11 +6,65 @@
 
 session_start();
 
+// Definir Token de Acceso para Acciones Sensibles (Personalizar)
+define('ADMIN_TOKEN', 'IPTV_SECURE_2026');
+
+/**
+ * Validación SSRF para URLs
+ */
+function es_url_segura($url) {
+    $parsed = parse_url($url);
+    if (!$parsed || !isset($parsed['host'])) return false;
+
+    // Solo permitir http y https
+    if (!in_array($parsed['scheme'], ['http', 'https'])) return false;
+
+    // Bloquear IPs locales y rangos privados (Prevención SSRF)
+    $host = $parsed['host'];
+    if (filter_var($host, FILTER_VALIDATE_IP)) {
+        if (!filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            return false;
+        }
+    }
+
+    // Bloquear nombres de host peligrosos
+    $blacklist = ['localhost', '127.0.0.1', 'metadata.google.internal', 'instance-data'];
+    foreach ($blacklist as $bad) {
+        if (stripos($host, $bad) !== false) return false;
+    }
+
+    return true;
+}
+
+// Lógica de Verificación (Enlaces Vivos)
+if (isset($_GET['action']) && $_GET['action'] === 'check' && isset($_GET['url'])) {
+    header('Content-Type: application/json');
+    $url = trim(explode(' ', $_GET['url'])[0]);
+
+    if (!es_url_segura($url)) {
+        echo json_encode(['status' => 'error', 'message' => 'URL no permitida']);
+        exit;
+    }
+
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_NOBODY, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true); // Seguridad: Verificar SSL
+    curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+    curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    echo json_encode(['status' => ($http_code >= 200 && $http_code < 400) ? 'online' : 'offline', 'code' => $http_code]);
+    exit;
+}
+
 // Configuración de fuentes
-$fuentes_predeterminadas = [
+$fuentes_config = [
     'Locales' => ['Canales1.m3u8', 'Canales2.m3u8', 'Canales3.m3u8', 'Canales4.m3u8'],
     'iptv-org (Global)' => 'https://iptv-org.github.io/iptv/index.m3u',
-    'iptv-org (Por Idioma)' => 'https://iptv-org.github.io/iptv/index.language.m3u',
+    'iptv-org (Idiomas)' => 'https://iptv-org.github.io/iptv/index.language.m3u',
     'iptv-org (Categorías)' => 'https://iptv-org.github.io/iptv/index.category.m3u',
     'Free-TV (Global)' => 'https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8',
     'jromero88 (Full)' => 'https://raw.githubusercontent.com/jromero88/iptv/master/index.full.m3u',
@@ -18,100 +72,130 @@ $fuentes_predeterminadas = [
     'VOD Series (TMDB)' => 'https://aymrgknetzpucldhpkwm.supabase.co/storage/v1/object/public/tmdb/trending-series.m3u',
     'China IPTV' => 'https://raw.githubusercontent.com/hujingguang/ChinaIPTV/main/cnTV_AutoUpdate.m3u8',
     'España (Free-TV)' => 'https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_spain.m3u8',
-    'Argentina (iptv-org)' => 'https://iptv-org.github.io/iptv/countries/ar.m3u'
+    'Argentina (iptv-org)' => 'https://iptv-org.github.io/iptv/countries/ar.m3u',
+    'm3u8-xtream' => 'https://raw.githubusercontent.com/m3u8-xtream/m3u8-xtream-playlist/main/index.m3u8',
+    'World IP TV' => 'https://raw.githubusercontent.com/Romaxa55/world_ip_tv/master/playlist.m3u8',
+    'Chinese IPv4' => 'https://raw.githubusercontent.com/BurningC4/Chinese-IPTV/master/TV-IPV4.m3u'
 ];
 
+// Inicialización de Base de Datos SQLite
+$db_file = 'iptv_channels.db';
+$db = new PDO("sqlite:$db_file");
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+// Crear tablas si no existen
+$db->exec("CREATE TABLE IF NOT EXISTS channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT,
+    logo TEXT,
+    grupo TEXT,
+    url TEXT,
+    fuente_key TEXT,
+    source_file TEXT
+)");
+$db->exec("CREATE INDEX IF NOT EXISTS idx_nombre ON channels(nombre)");
+$db->exec("CREATE INDEX IF NOT EXISTS idx_grupo ON channels(grupo)");
+$db->exec("CREATE INDEX IF NOT EXISTS idx_fuente ON channels(fuente_key)");
+
 /**
- * Función para obtener canales de forma eficiente y categorías
+ * Función para sincronizar fuentes a la DB
  */
-function obtener_canales($fuente, $busqueda = '', $categoria_filtro = '', $pagina = 1, $limite = 48) {
-    $canales = [];
-    $categorias = ['General'];
-    $contador = 0;
-    $inicio = ($pagina - 1) * $limite;
-    $fin = $inicio + $limite;
+function sincronizar_db($db, $fuentes_config) {
+    $db->exec("DELETE FROM channels");
+    $db->beginTransaction();
+    $stmt = $db->prepare("INSERT INTO channels (nombre, logo, grupo, url, fuente_key, source_file) VALUES (?, ?, ?, ?, ?, ?)");
 
-    $archivos = is_array($fuente) ? $fuente : [$fuente];
-
-    foreach ($archivos as $archivo) {
-        $es_remoto = (strpos($archivo, 'http') === 0);
-
-        if (!$es_remoto && !file_exists($archivo)) continue;
-
-        // Cache simple para archivos remotos
-        $path_archivo = $archivo;
-        if ($es_remoto) {
-            $cache_file = 'cache_' . md5($archivo) . '.m3u8';
-            if (!file_exists($cache_file) || (time() - filemtime($cache_file) > 3600)) {
+    foreach ($fuentes_config as $fuente_key => $f) {
+        $archivos = is_array($f) ? $f : [$f];
+        foreach ($archivos as $archivo) {
+            $es_remoto = (strpos($archivo, 'http') === 0);
+            $path = $archivo;
+            if ($es_remoto) {
+                $cache_file = 'sync_cache_' . md5($archivo) . '.m3u8';
                 $content = @file_get_contents($archivo);
-                if ($content) file_put_contents($cache_file, $content);
-            }
-            if (file_exists($cache_file)) $path_archivo = $cache_file;
-        }
+                if ($content) {
+                    file_put_contents($cache_file, $content);
+                    $path = $cache_file;
+                } else continue;
+            } elseif (!file_exists($archivo)) continue;
 
-        $handle = @fopen($path_archivo, "r");
-        if ($handle) {
-            $info_actual = null;
-            while (($linea = fgets($handle)) !== false) {
-                $linea = trim($linea);
-                if (empty($linea)) continue;
-
-                if (strpos($linea, '#EXTINF:') === 0) {
-                    $nombre = (strpos($linea, ',') !== false) ? trim(substr($linea, strrpos($linea, ',') + 1)) : 'Sin nombre';
-                    $logo = preg_match('/tvg-logo="([^"]*)"/', $linea, $m) ? $m[1] : '';
-                    $grupo = preg_match('/group-title="([^"]*)"/', $linea, $m) ? $m[1] : 'General';
-
-                    // Coleccionar categorías únicas (solo los primeros 2000 canales para no saturar memoria)
-                    if (count($categorias) < 50 && !in_array($grupo, $categorias)) {
-                        $categorias[] = $grupo;
+            $handle = @fopen($path, "r");
+            if ($handle) {
+                $info = null;
+                while (($linea = fgets($handle)) !== false) {
+                    $linea = trim($linea);
+                    if (strpos($linea, '#EXTINF:') === 0) {
+                        $nombre = (strpos($linea, ',') !== false) ? trim(substr($linea, strrpos($linea, ',') + 1)) : 'Sin nombre';
+                        $logo = preg_match('/tvg-logo="([^"]*)"/', $linea, $m) ? $m[1] : '';
+                        $grupo = preg_match('/group-title="([^"]*)"/', $linea, $m) ? $m[1] : 'General';
+                        $info = ['nombre' => $nombre, 'logo' => $logo, 'grupo' => $grupo];
+                    } elseif (strpos($linea, '#') !== 0 && $info) {
+                        $stmt->execute([$info['nombre'], $info['logo'], $info['grupo'], $linea, $fuente_key, basename($archivo)]);
+                        $info = null;
                     }
-
-                    $info_actual = ['nombre' => $nombre, 'logo' => $logo, 'grupo' => $grupo];
-                } elseif (strpos($linea, '#') !== 0 && $info_actual) {
-                    $url = $linea;
-                    $mostrar = true;
-
-                    if (!empty($categoria_filtro) && $info_actual['grupo'] !== $categoria_filtro) {
-                        $mostrar = false;
-                    }
-
-                    if ($mostrar && !empty($busqueda)) {
-                        if (stripos($info_actual['nombre'], $busqueda) === false &&
-                            stripos($info_actual['grupo'], $busqueda) === false) {
-                            $mostrar = false;
-                        }
-                    }
-
-                    if ($mostrar) {
-                        if ($contador >= $inicio && $contador < $fin) {
-                            $info_actual['url'] = $url;
-                            $canales[] = $info_actual;
-                        }
-                        $contador++;
-                    }
-                    $info_actual = null;
                 }
+                fclose($handle);
             }
-            fclose($handle);
+            if ($es_remoto && isset($cache_file)) @unlink($cache_file);
         }
     }
+    $db->commit();
+}
 
-    return ['canales' => $canales, 'total' => $contador, 'categorias' => $categorias];
+if (isset($_GET['action']) && $_GET['action'] === 'sync') {
+    if (!isset($_GET['token']) || $_GET['token'] !== ADMIN_TOKEN) {
+        die('Acceso denegado: Token inválido');
+    }
+    sincronizar_db($db, $fuentes_config);
+    header('Location: index.php?msg=Sincronización completa');
+    exit;
 }
 
 $busqueda = isset($_GET['q']) ? $_GET['q'] : '';
 $cat_filtro = isset($_GET['c']) ? $_GET['c'] : '';
-$fuente_key = isset($_GET['f']) ? $_GET['f'] : 'Locales';
+$fuente_key = isset($_GET['f']) ? $_GET['f'] : 'Global';
 $pagina = isset($_GET['p']) ? (int)$_GET['p'] : 1;
-if ($pagina < 1) $pagina = 1;
+$limite = 48;
+$inicio = ($pagina - 1) * $limite;
 
-$fuente_actual = isset($fuentes_predeterminadas[$fuente_key]) ? $fuentes_predeterminadas[$fuente_key] : $fuentes_predeterminadas['Locales'];
+// Construir Consulta SQL
+$where = [];
+$params = [];
 
-$resultado = obtener_canales($fuente_actual, $busqueda, $cat_filtro, $pagina);
-$canales = $resultado['canales'];
-$total_canales = $resultado['total'];
-$categorias = $resultado['categorias'];
-$total_paginas = ceil($total_canales / 48);
+if (!empty($busqueda)) {
+    $where[] = "(nombre LIKE ? OR grupo LIKE ?)";
+    $params[] = "%$busqueda%";
+    $params[] = "%$busqueda%";
+}
+
+if (!empty($cat_filtro)) {
+    $where[] = "grupo = ?";
+    $params[] = $cat_filtro;
+}
+
+if ($fuente_key !== 'Global') {
+    $where[] = "fuente_key = ?";
+    $params[] = $fuente_key;
+}
+
+$where_sql = count($where) > 0 ? "WHERE " . implode(" AND ", $where) : "";
+
+// Obtener Canales
+$sql = "SELECT * FROM channels $where_sql LIMIT $limite OFFSET $inicio";
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
+$canales = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Obtener Total
+$sql_total = "SELECT COUNT(*) FROM channels $where_sql";
+$stmt_total = $db->prepare($sql_total);
+$stmt_total->execute($params);
+$total_canales = $stmt_total->fetchColumn();
+
+// Obtener Categorías (Top 50)
+$categorias = $db->query("SELECT DISTINCT grupo FROM channels ORDER BY grupo LIMIT 50")->fetchAll(PDO::FETCH_COLUMN);
+
+$total_paginas = ceil($total_canales / $limite);
 
 ?>
 <!DOCTYPE html>
@@ -163,7 +247,8 @@ $total_paginas = ceil($total_canales / 48);
                         Fuente: <?php echo htmlspecialchars($fuente_key); ?>
                     </a>
                     <ul class="dropdown-menu dropdown-menu-dark">
-                        <?php foreach ($fuentes_predeterminadas as $key => $val): ?>
+                        <li><a class="dropdown-item" href="?f=Global">Global</a></li>
+                        <?php foreach ($fuentes_config as $key => $val): ?>
                             <li><a class="dropdown-item" href="?f=<?php echo urlencode($key); ?>"><?php echo htmlspecialchars($key); ?></a></li>
                         <?php endforeach; ?>
                     </ul>
@@ -178,6 +263,11 @@ $total_paginas = ceil($total_canales / 48);
                             <li><a class="dropdown-item" href="?f=<?php echo urlencode($fuente_key); ?>&c=<?php echo urlencode($cat); ?>"><?php echo htmlspecialchars($cat); ?></a></li>
                         <?php endforeach; ?>
                     </ul>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link text-warning" href="?action=sync&token=<?php echo ADMIN_TOKEN; ?>" onclick="return confirm('¿Sincronizar base de datos ahora? Esto puede tardar.')">
+                        <i class="fas fa-sync-alt me-1"></i>Actualizar DB
+                    </a>
                 </li>
             </ul>
             <form class="d-flex" method="GET">
@@ -199,7 +289,10 @@ $total_paginas = ceil($total_canales / 48);
             </div>
 
             <div class="p-3">
-                <h4 id="playing-title">Seleccione un canal para comenzar</h4>
+                <div class="d-flex justify-content-between align-items-center">
+                    <h4 id="playing-title" class="mb-0">Seleccione un canal para comenzar</h4>
+                    <button class="btn btn-sm btn-outline-success" onclick="verifyAllVisible()"><i class="fas fa-check-double me-1"></i>Verificar Vivos</button>
+                </div>
                 <p id="playing-group" class="text-secondary"></p>
 
                 <hr class="border-secondary">
@@ -241,7 +334,11 @@ $total_paginas = ceil($total_canales / 48);
                                     <div class="small fw-bold text-truncate" title="<?php echo htmlspecialchars($canal['nombre']); ?>">
                                         <?php echo htmlspecialchars($canal['nombre'] ?: 'Sin nombre'); ?>
                                     </div>
-                                    <span class="badge group-badge text-truncate"><?php echo htmlspecialchars($canal['grupo']); ?></span>
+                                    <span class="badge group-badge text-truncate mb-1"><?php echo htmlspecialchars($canal['grupo']); ?></span>
+                                    <div class="small text-muted mb-1" style="font-size: 0.65rem;"><i class="fas fa-database me-1"></i><?php echo htmlspecialchars($canal['source_file']); ?></div>
+                                    <div class="status-indicator" data-url="<?php echo htmlspecialchars($canal['url']); ?>">
+                                        <span class="badge bg-secondary status-badge"><i class="fas fa-circle-notch fa-spin me-1"></i>Pendiente</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -363,6 +460,41 @@ $total_paginas = ceil($total_canales / 48);
             playChannel(url, 'Enlace Externo', 'Personalizado');
         }
     }
+
+    async function verifyStatus(element) {
+        const url = element.getAttribute('data-url');
+        const badge = element.querySelector('.status-badge');
+
+        try {
+            const response = await fetch(`index.php?action=check&url=${encodeURIComponent(url)}`);
+            const data = await response.json();
+
+            if (data.status === 'online') {
+                badge.className = 'badge bg-success status-badge';
+                badge.innerHTML = '<i class="fas fa-check-circle me-1"></i>Vivo';
+            } else {
+                badge.className = 'badge bg-danger status-badge';
+                badge.innerHTML = '<i class="fas fa-times-circle me-1"></i>Caído';
+            }
+        } catch (e) {
+            badge.className = 'badge bg-warning text-dark status-badge';
+            badge.innerHTML = '<i class="fas fa-exclamation-triangle me-1"></i>Error';
+        }
+    }
+
+    function verifyAllVisible() {
+        const indicators = document.querySelectorAll('.status-indicator');
+        indicators.forEach(indicator => {
+            indicator.querySelector('.status-badge').innerHTML = '<i class="fas fa-circle-notch fa-spin me-1"></i>Checando...';
+            verifyStatus(indicator);
+        });
+    }
+
+    // Verificar automáticamente los primeros 10 para dar feedback inmediato
+    window.addEventListener('DOMContentLoaded', () => {
+        const indicators = Array.from(document.querySelectorAll('.status-indicator')).slice(0, 12);
+        indicators.forEach(verifyStatus);
+    });
 
     // Cargar el primer canal automáticamente si existe
     <?php if (!empty($canales)): ?>
