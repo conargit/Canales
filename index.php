@@ -78,6 +78,21 @@ $fuentes_config = [
     'Chinese IPv4' => 'https://raw.githubusercontent.com/BurningC4/Chinese-IPTV/master/TV-IPV4.m3u'
 ];
 
+/**
+ * Motor de Búsqueda Global (Ilimitado)
+ * Genera enlaces de búsqueda para encontrar listas premium en la red.
+ */
+function generar_enlaces_deep_search($termino) {
+    $busquedas = [
+        "Google Dorks" => "https://www.google.com/search?q=" . urlencode('intitle:"index of" "m3u" ' . $termino),
+        "GitHub Gists" => "https://github.com/search?q=" . urlencode($termino . ' extension:m3u') . "&type=code",
+        "Pastebin" => "https://www.google.com/search?q=" . urlencode("site:pastebin.com " . $termino . " iptv"),
+        "Shodan (Streams)" => "https://www.shodan.io/search?query=" . urlencode('http.title:"HLS" ' . $termino),
+        "Xtream Servers" => "https://www.google.com/search?q=" . urlencode('inurl:"/player_api.php" ' . $termino)
+    ];
+    return $busquedas;
+}
+
 // Inicialización de Base de Datos SQLite
 $db_file = 'iptv_channels.db';
 $db = new PDO("sqlite:$db_file");
@@ -148,6 +163,47 @@ if (isset($_GET['action']) && $_GET['action'] === 'sync') {
     }
     sincronizar_db($db, $fuentes_config);
     header('Location: index.php?msg=Sincronización completa');
+    exit;
+}
+
+if (isset($_GET['action']) && $_GET['action'] === 'import' && isset($_GET['url'])) {
+    if (!isset($_GET['token']) || $_GET['token'] !== ADMIN_TOKEN) {
+        die('Acceso denegado');
+    }
+    $url = $_GET['url'];
+
+    // Soporte para IDs de Pastebin
+    if (preg_match('/^[a-zA-Z0-9]{8}$/', $url)) {
+        $url = "https://pastebin.com/raw/" . $url;
+    }
+
+    $nombre_fuente = "Importado_" . time();
+    $fuente_temp = [$nombre_fuente => $url];
+
+    // Ingesta rápida
+    $stmt = $db->prepare("INSERT INTO channels (nombre, logo, grupo, url, fuente_key, source_file) VALUES (?, ?, ?, ?, ?, ?)");
+    $content = @file_get_contents($url);
+    if ($content) {
+        $lines = explode("\n", $content);
+        $info = null;
+        $db->beginTransaction();
+        foreach ($lines as $linea) {
+            $linea = trim($linea);
+            if (strpos($linea, '#EXTINF:') === 0) {
+                $nombre = (strpos($linea, ',') !== false) ? trim(substr($linea, strrpos($linea, ',') + 1)) : 'Canal Importado';
+                $logo = preg_match('/tvg-logo="([^"]*)"/', $linea, $m) ? $m[1] : '';
+                $grupo = preg_match('/group-title="([^"]*)"/', $linea, $m) ? $m[1] : 'WEB_IMPORT';
+                $info = ['nombre' => $nombre, 'logo' => $logo, 'grupo' => $grupo];
+            } elseif (strpos($linea, 'http') === 0 && $info) {
+                $stmt->execute([$info['nombre'], $info['logo'], $info['grupo'], $linea, 'Importado', basename($url)]);
+                $info = null;
+            }
+        }
+        $db->commit();
+        header('Location: index.php?msg=Importación exitosa');
+    } else {
+        die('No se pudo acceder a la URL');
+    }
     exit;
 }
 
@@ -273,8 +329,8 @@ $total_paginas = ceil($total_canales / $limite);
             <form class="d-flex" method="GET">
                 <input type="hidden" name="f" value="<?php echo htmlspecialchars($fuente_key); ?>">
                 <input type="hidden" name="c" value="<?php echo htmlspecialchars($cat_filtro); ?>">
-                <input class="form-control me-2 bg-dark text-white border-secondary" type="search" name="q" placeholder="Buscar canal..." value="<?php echo htmlspecialchars($busqueda); ?>">
-                <button class="btn btn-outline-primary" type="submit">Buscar</button>
+                <input class="form-control me-2 bg-dark text-white border-secondary" type="search" name="q" placeholder="Busca en TODA la red..." value="<?php echo htmlspecialchars($busqueda); ?>">
+                <button class="btn btn-primary" type="submit"><i class="fas fa-search"></i></button>
             </form>
         </div>
     </div>
@@ -297,12 +353,39 @@ $total_paginas = ceil($total_canales / $limite);
 
                 <hr class="border-secondary">
 
-                <div class="card bg-dark border-secondary mb-3">
-                    <div class="card-body">
-                        <h5 class="card-title text-white">Reproducir URL personalizada</h5>
-                        <div class="input-group">
-                            <input type="text" id="custom-url" class="form-control bg-dark text-white border-secondary" placeholder="https://ejemplo.com/lista.m3u8">
-                            <button class="btn btn-primary" type="button" onclick="playCustomUrl()">Reproducir</button>
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <div class="card bg-dark border-secondary h-100">
+                            <div class="card-body">
+                                <h5 class="card-title text-white"><i class="fas fa-link me-2"></i>URL Directa</h5>
+                                <div class="input-group">
+                                    <input type="text" id="custom-url" class="form-control bg-dark text-white border-secondary" placeholder="https://...m3u8">
+                                    <button class="btn btn-primary" type="button" onclick="playCustomUrl()">Play</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card bg-dark border-secondary h-100">
+                            <div class="card-body">
+                                <h5 class="card-title text-warning"><i class="fas fa-file-import me-2"></i>Importar M3U</h5>
+                                <div class="input-group">
+                                    <input type="text" id="import-url" class="form-control bg-dark text-white border-secondary" placeholder="URL o Pastebin ID">
+                                    <button class="btn btn-warning" type="button" onclick="importUrl()">Importar</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card bg-dark border-secondary h-100">
+                            <div class="card-body">
+                                <h5 class="card-title text-info"><i class="fas fa-search-plus me-2"></i>Deep Web Search</h5>
+                                <div class="d-flex flex-wrap">
+                                    <?php foreach (generar_enlaces_deep_search($busqueda ?: 'iptv premium') as $label => $url): ?>
+                                        <a href="<?php echo $url; ?>" target="_blank" class="btn btn-xs btn-outline-info m-1 py-0 px-2" style="font-size: 0.7rem;"><?php echo $label; ?></a>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -317,7 +400,13 @@ $total_paginas = ceil($total_canales / $limite);
                 <?php if (empty($canales)): ?>
                     <div class="col-12 text-center py-5 text-secondary">
                         <i class="fas fa-search fa-3x mb-3"></i>
-                        <p>No se encontraron canales.</p>
+                        <p>No se encontraron canales localmente.</p>
+                        <div class="mt-3">
+                            <h6 class="text-white">Prueba Búsqueda Externa Ilimitada:</h6>
+                            <?php foreach (generar_enlaces_deep_search($busqueda) as $label => $url): ?>
+                                <a href="<?php echo $url; ?>" target="_blank" class="btn btn-sm btn-outline-info m-1"><?php echo $label; ?></a>
+                            <?php endforeach; ?>
+                        </div>
                     </div>
                 <?php else: ?>
                     <?php foreach ($canales as $index => $canal): ?>
@@ -458,6 +547,15 @@ $total_paginas = ceil($total_canales / $limite);
         const url = document.getElementById('custom-url').value;
         if (url) {
             playChannel(url, 'Enlace Externo', 'Personalizado');
+        }
+    }
+
+    function importUrl() {
+        const url = document.getElementById('import-url').value;
+        if (url) {
+            if (confirm('¿Importar todos los canales de esta lista a la base de datos?')) {
+                window.location.href = `index.php?action=import&token=<?php echo ADMIN_TOKEN; ?>&url=\${encodeURIComponent(url)}`;
+            }
         }
     }
 
