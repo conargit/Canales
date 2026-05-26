@@ -1,7 +1,7 @@
 <?php
 /**
  * WhatsApp SaaS Platform - AI Agent for Businesses
- * Version: 1.1
+ * Version: 1.2 (MySQL Edition)
  * Author: Jules
  * Single-file PHP implementation
  */
@@ -16,6 +16,9 @@ if (empty($_SESSION['csrf_token'])) {
 }
 
 function check_csrf() {
+    // Bypass CSRF for Webhook
+    if (isset($_GET['action']) && $_GET['action'] === 'webhook') return;
+
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
             die("Error de seguridad: Token CSRF no válido.");
@@ -23,60 +26,101 @@ function check_csrf() {
     }
 }
 
-// --- DATABASE SETUP ---
+// --- DATABASE SETUP (MySQL) ---
 function getDb() {
-    $dbFile = __DIR__ . '/whatsapp.db';
-    $db = new PDO("sqlite:$dbFile");
-    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $host = getenv('DB_HOST') ?: 'localhost';
+    $dbname = getenv('DB_NAME') ?: 'whatsapp';
+    $user = getenv('DB_USER') ?: 'root';
+    $pass = getenv('DB_PASS') ?: '';
 
-    // Create tables if they don't exist
-    $db->exec("CREATE TABLE IF NOT EXISTS ajustes (
-        clave TEXT PRIMARY KEY,
-        valor TEXT
-    )");
+    try {
+        $dsn = "mysql:host=$host;dbname=$dbname;charset=utf8mb4";
+        $db = new PDO($dsn, $user, $pass);
+        $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-    $db->exec("CREATE TABLE IF NOT EXISTS memoria (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tipo TEXT,
-        fuente TEXT,
-        contenido TEXT,
-        fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-    )");
+        // Create tables if they don't exist
+        $db->exec("CREATE TABLE IF NOT EXISTS ajustes (
+            clave VARCHAR(255) PRIMARY KEY,
+            valor TEXT
+        ) ENGINE=InnoDB");
 
-    $db->exec("CREATE TABLE IF NOT EXISTS chats (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        remitente TEXT,
-        mensaje TEXT,
-        respuesta TEXT,
-        modo TEXT DEFAULT 'auto', -- 'auto' or 'manual'
-        id_asesor INTEGER DEFAULT 0,
-        fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-    )");
+        // Seed webhook token if not exists
+        $stmt = $db->prepare("SELECT COUNT(*) FROM ajustes WHERE clave = 'webhook_token'");
+        $stmt->execute();
+        if ($stmt->fetchColumn() == 0) {
+            $db->prepare("INSERT INTO ajustes (clave, valor) VALUES ('webhook_token', ?)")->execute([bin2hex(random_bytes(16))]);
+        }
 
-    $db->exec("CREATE TABLE IF NOT EXISTS campanas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT,
-        mensaje TEXT,
-        destinatarios TEXT, -- JSON o Lista
-        estado TEXT DEFAULT 'pendiente', -- 'pendiente', 'en_curso', 'completada'
-        fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-    )");
+        $db->exec("CREATE TABLE IF NOT EXISTS memoria (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            tipo VARCHAR(50),
+            fuente VARCHAR(255),
+            contenido LONGTEXT,
+            fecha DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB");
 
-    $db->exec("CREATE TABLE IF NOT EXISTS asesores (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT,
-        email TEXT,
-        estado TEXT DEFAULT 'activo'
-    )");
+        $db->exec("CREATE TABLE IF NOT EXISTS chats (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            remitente VARCHAR(50),
+            mensaje TEXT,
+            respuesta TEXT,
+            modo VARCHAR(20) DEFAULT 'auto',
+            id_asesor INT DEFAULT 0,
+            fecha DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB");
 
-    return $db;
+        $db->exec("CREATE TABLE IF NOT EXISTS campanas (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nombre VARCHAR(255),
+            mensaje TEXT,
+            destinatarios TEXT,
+            estado VARCHAR(50) DEFAULT 'pendiente',
+            fecha DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB");
+
+        $db->exec("CREATE TABLE IF NOT EXISTS asesores (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nombre VARCHAR(255),
+            email VARCHAR(255),
+            estado VARCHAR(50) DEFAULT 'activo'
+        ) ENGINE=InnoDB");
+
+        return $db;
+    } catch (PDOException $e) {
+        die("Error de conexión MySQL: " . $e->getMessage() . ". Asegúrese de que la base de datos '$dbname' existe.");
+    }
 }
 
-// Initialize DB on each load
-try {
-    $pdo = getDb();
-} catch (Exception $e) {
-    die("Error de base de datos: " . $e->getMessage());
+// Initialize DB
+$pdo = getDb();
+
+// --- HELPERS ---
+function get_setting($clave) {
+    global $pdo;
+    $stmt = $pdo->prepare("SELECT valor FROM ajustes WHERE clave = ?");
+    $stmt->execute([$clave]);
+    return $stmt->fetchColumn();
+}
+
+function gateway_call($endpoint, $method = 'GET', $body = null) {
+    $url = get_setting('gateway_url');
+    $token = get_setting('gateway_token');
+
+    if (!$url || !$token) return null;
+
+    $ch = curl_init(rtrim($url, '/') . '/' . $endpoint);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'apikey: ' . $token
+    ]);
+
+    if ($body) curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
+
+    $res = curl_exec($ch);
+    curl_close($ch);
+    return json_decode($res, true);
 }
 
 // --- AI LOGIC (RAG) ---
@@ -147,6 +191,40 @@ function get_ai_response($userMessage) {
     }
 }
 
+// --- WEBHOOK RECEIVER (Real-time messages) ---
+if (isset($_GET['action']) && $_GET['action'] === 'webhook') {
+    $token_req = $_GET['token'] ?? '';
+    $stmtT = $pdo->prepare("SELECT valor FROM ajustes WHERE clave = 'webhook_token'");
+    $stmtT->execute();
+    $real_token = $stmtT->fetchColumn();
+
+    if ($token_req !== $real_token) {
+        http_response_code(401);
+        die("Unauthorized");
+    }
+
+    $input = file_get_contents("php://input");
+    $data = json_decode($input, true);
+
+    if ($data) {
+        // Logic depends on the Gateway (Evolution API, etc)
+        // Usually: data['data']['message']['conversation'] and data['data']['key']['remoteJid']
+        $mensaje = $data['data']['message']['conversation'] ?? $data['data']['message']['extendedTextMessage']['text'] ?? '';
+        $remitente = explode('@', $data['data']['key']['remoteJid'] ?? '')[0] ?? 'Desconocido';
+
+        if (!empty($mensaje) && !empty($remitente)) {
+            $respuesta_ai = get_ai_response($mensaje);
+            $stmt = $pdo->prepare("INSERT INTO chats (remitente, mensaje, respuesta, modo) VALUES (?, ?, ?, 'auto')");
+            $stmt->execute([$remitente, $mensaje, $respuesta_ai]);
+
+            // Here we would call the Gateway SEND API
+            // gateway_send($remitente, $respuesta_ai);
+        }
+    }
+    http_response_code(200);
+    exit;
+}
+
 // --- ACTIONS HANDLER ---
 $message = "";
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -169,7 +247,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $xpath = new DOMXPath($doc);
             foreach ($xpath->query('//script|//style') as $node) { $node->parentNode->removeChild($node); }
             $text = trim(preg_replace('/\s+/', ' ', strip_tags($doc->textContent)));
-            $text = mb_substr($text, 0, 5000);
+            $text = mb_substr($text, 0, 10000); // Increased for MySQL
             $stmt = $pdo->prepare("INSERT INTO memoria (tipo, fuente, contenido) VALUES (?, ?, ?)");
             $stmt->execute(['url', $url, $text]);
             $message = "URL analizada y guardada con éxito.";
@@ -192,7 +270,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($action === 'save_settings') {
         foreach (['openai_key', 'agent_name', 'agent_tone', 'agent_instructions', 'gateway_url', 'gateway_token', 'gateway_instance'] as $key) {
             if (isset($_POST[$key])) {
-                $pdo->prepare("INSERT OR REPLACE INTO ajustes (clave, valor) VALUES (?, ?)")->execute([$key, $_POST[$key]]);
+                $pdo->prepare("INSERT INTO ajustes (clave, valor) VALUES (?, ?) ON DUPLICATE KEY UPDATE valor = VALUES(valor)")->execute([$key, $_POST[$key]]);
             }
         }
         $message = "Configuración guardada.";
@@ -238,6 +316,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($action === 'delete_campana' && isset($_POST['id'])) {
         $pdo->prepare("DELETE FROM campanas WHERE id = ?")->execute([$_POST['id']]);
         $message = "Campaña eliminada.";
+    }
+
+    if ($action === 'send_campana' && isset($_POST['id'])) {
+        $stmtC = $pdo->prepare("SELECT * FROM campanas WHERE id = ?");
+        $stmtC->execute([$_POST['id']]);
+        $camp = $stmtC->fetch(PDO::FETCH_ASSOC);
+
+        if ($camp) {
+            $numeros = preg_split('/[\s,]+/', $camp['destinatarios']);
+            $count = 0;
+            foreach ($numeros as $num) {
+                $num = trim($num);
+                if (!empty($num)) {
+                    gateway_call("message/sendText/" . get_setting('gateway_instance'), 'POST', [
+                        'number' => $num,
+                        'text' => $camp['mensaje']
+                    ]);
+                    $count++;
+                }
+            }
+            $pdo->prepare("UPDATE campanas SET estado = 'completada' WHERE id = ?")->execute([$camp['id']]);
+            $message = "Campaña enviada a $count números.";
+        }
     }
 }
 
@@ -350,7 +451,7 @@ function get_page_title($view) {
         <div class="row">
             <div class="col-md-6">
                 <div class="card p-4 mb-4"><h5 class="fw-bold mb-3">Entrenar por URL</h5><form method="POST"><input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>"><div class="input-group mb-3"><input type="url" name="url" class="form-control" placeholder="https://tu-negocio.com" required><button class="btn btn-primary" type="submit" name="action" value="scrape">Analizar</button></div></form></div>
-                <div class="card p-4"><h5 class="fw-bold mb-3">Subir Documentos</h5><form method="POST" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>"><div class="mb-3"><input class="form-control" type="file" name="file" accept=".txt,.md"></div><button class="btn btn-primary w-100" type="submit" name="action" value="upload">Cargar</button></form></div>
+                <div class="card p-4"><h5 class="fw-bold mb-3">Subir Documentos</h5><p class="small text-muted mb-2">Formatos soportados: .txt, .md, .json</p><form method="POST" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>"><div class="mb-3"><input class="form-control" type="file" name="file" accept=".txt,.md,.json"></div><button class="btn btn-primary w-100" type="submit" name="action" value="upload">Cargar</button></form></div>
             </div>
             <div class="col-md-6"><div class="card p-4"><h5 class="fw-bold mb-4">Memoria del Negocio (<?php echo count($fuentes); ?>)</h5><div class="list-group list-group-flush overflow-auto" style="max-height: 400px;"><?php foreach ($fuentes as $f): ?><div class="list-group-item d-flex justify-content-between align-items-center"><div class="text-truncate" style="max-width: 80%;"><h6 class="mb-0 text-truncate"><?php echo htmlspecialchars($f['fuente']); ?></h6><small class="text-muted"><?php echo $f['tipo']; ?> • <?php echo $f['fecha']; ?></small></div><form method="POST"><input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>"><input type="hidden" name="id" value="<?php echo $f['id']; ?>"><button class="btn btn-sm text-danger" name="action" value="delete_memory"><i class="fas fa-trash"></i></button></form></div><?php endforeach; ?></div></div></div>
         </div>
@@ -358,11 +459,22 @@ function get_page_title($view) {
     }
 
     function include_whatsapp() {
-        global $pdo; $stmt = $pdo->query("SELECT * FROM ajustes"); $settings = []; while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) { $settings[$row['clave']] = $row['valor']; }
-        $gateway_url = $settings['gateway_url'] ?? ''; $instance = $settings['gateway_instance'] ?? '';
-        $qr_image = $gateway_url && $instance ? "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=Real_WhatsApp_Connection_$instance" : "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=Configure_Gateway_First";
+        global $pdo;
+        $gateway_url = get_setting('gateway_url');
+        $instance = get_setting('gateway_instance');
+
+        $qr_image = "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=Configure_Gateway_First";
+
+        if ($gateway_url && $instance) {
+            $data = gateway_call("instance/connect/$instance");
+            if (isset($data['base64'])) {
+                $qr_image = $data['base64'];
+            } else {
+                $qr_image = "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=Error_Fetching_QR_Check_Settings";
+            }
+        }
         ?>
-        <div class="card mx-auto mb-4 text-center p-5" style="max-width: 600px;"><h4 class="fw-bold mb-4">Conecta tu WhatsApp</h4><div class="bg-light p-4 rounded mb-4 d-inline-block"><img src="<?php echo $qr_image; ?>" class="img-fluid rounded shadow-sm"></div><div class="mt-3"><span class="text-muted"><?php echo $gateway_url ? "Esperando escaneo de $instance..." : "Configura el Gateway en Ajustes"; ?></span></div></div>
+        <div class="card mx-auto mb-4 text-center p-5" style="max-width: 600px;"><h4 class="fw-bold mb-4">Conecta tu WhatsApp</h4><div class="bg-light p-4 rounded mb-4 d-inline-block"><img src="<?php echo $qr_image; ?>" class="img-fluid rounded shadow-sm" style="max-width: 300px;"></div><div class="mt-3"><span class="text-muted"><?php echo $gateway_url ? "Escanea para vincular $instance" : "Configura el Gateway en Ajustes"; ?></span></div></div>
         <div class="card mx-auto p-4" style="max-width: 600px;"><h6 class="fw-bold mb-3">Simulador de Webhook</h6><form method="POST" class="row g-2"><input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>"><input type="hidden" name="action" value="webhook_test"><div class="col-md-5"><input type="text" name="remitente" class="form-control" value="+5491155555555"></div><div class="col-md-5"><input type="text" name="mensaje" class="form-control" placeholder="Mensaje..." required></div><div class="col-md-2"><button type="submit" class="btn btn-primary w-100">Enviar</button></div></form></div>
         <?php
     }
@@ -387,7 +499,7 @@ function get_page_title($view) {
         global $pdo; $campanas = $pdo->query("SELECT * FROM campanas ORDER BY fecha DESC")->fetchAll(PDO::FETCH_ASSOC);
         ?>
         <div class="row"><div class="col-md-5"><div class="card p-4"><h5 class="fw-bold mb-4">Nueva Campaña</h5><form method="POST"><input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>"><input type="hidden" name="action" value="create_campana"><div class="mb-3"><label class="form-label">Nombre</label><input type="text" name="nombre" class="form-control" required></div><div class="mb-3"><label class="form-label">Mensaje</label><textarea name="mensaje" class="form-control" rows="3" required></textarea></div><div class="mb-3"><label class="form-label">Destinatarios</label><textarea name="destinatarios" class="form-control" rows="3" placeholder="+549..."></textarea></div><button type="submit" class="btn btn-primary w-100">Crear Campaña</button></form></div></div>
-        <div class="col-md-7"><div class="card p-4 h-100"><h5 class="fw-bold mb-4">Historial</h5><div class="list-group list-group-flush"><?php foreach ($campanas as $c): ?><div class="list-group-item d-flex justify-content-between"><div><h6 class="mb-0 fw-bold"><?php echo htmlspecialchars($c['nombre']); ?></h6><small><?php echo $c['fecha']; ?></small></div><form method="POST"><input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>"><input type="hidden" name="id" value="<?php echo $c['id']; ?>"><button class="btn btn-sm text-danger" name="action" value="delete_campana"><i class="fas fa-trash"></i></button></form></div><?php endforeach; ?></div></div></div></div>
+        <div class="col-md-7"><div class="card p-4 h-100"><h5 class="fw-bold mb-4">Historial</h5><div class="list-group list-group-flush"><?php foreach ($campanas as $c): ?><div class="list-group-item d-flex justify-content-between align-items-center"><div><h6 class="mb-0 fw-bold"><?php echo htmlspecialchars($c['nombre']); ?></h6><small><?php echo $c['fecha']; ?> • <?php echo strtoupper($c['estado']); ?></small></div><div class="d-flex"><form method="POST" class="me-1"><input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>"><input type="hidden" name="id" value="<?php echo $c['id']; ?>"><button class="btn btn-sm btn-success" name="action" value="send_campana" <?php echo $c['estado'] == 'completada' ? 'disabled' : ''; ?>><i class="fas fa-paper-plane"></i></button></form><form method="POST"><input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>"><input type="hidden" name="id" value="<?php echo $c['id']; ?>"><button class="btn btn-sm text-danger" name="action" value="delete_campana"><i class="fas fa-trash"></i></button></form></div></div><?php endforeach; ?></div></div></div></div>
         <?php
     }
 
@@ -401,8 +513,11 @@ function get_page_title($view) {
 
     function include_settings() {
         global $pdo; $stmt = $pdo->query("SELECT * FROM ajustes"); $settings = []; while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) { $settings[$row['clave']] = $row['valor']; }
+        $webhook_token = $settings['webhook_token'] ?? '';
+        $full_webhook_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[PHP_SELF]?action=webhook&token=$webhook_token";
         ?>
-        <div class="card mx-auto p-4" style="max-width: 800px;"><h5 class="fw-bold mb-4">Configuración Agente AI</h5><form method="POST"><input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>"><input type="hidden" name="action" value="save_settings"><div class="mb-3"><label class="form-label">Nombre Agente</label><input type="text" name="agent_name" class="form-control" value="<?php echo htmlspecialchars($settings['agent_name'] ?? 'Vendedor Pro'); ?>"></div><div class="mb-3"><label class="form-label">OpenAI Key</label><input type="password" name="openai_key" class="form-control" value="<?php echo htmlspecialchars($settings['openai_key'] ?? ''); ?>"></div><hr><div class="mb-3"><label class="form-label">Gateway URL</label><input type="url" name="gateway_url" class="form-control" value="<?php echo htmlspecialchars($settings['gateway_url'] ?? ''); ?>"></div><div class="mb-3"><label class="form-label">Gateway Instance</label><input type="text" name="gateway_instance" class="form-control" value="<?php echo htmlspecialchars($settings['gateway_instance'] ?? ''); ?>"></div><button type="submit" class="btn btn-primary px-5">Guardar Todo</button></form></div>
+        <div class="card mx-auto p-4 mb-4" style="max-width: 800px;"><h5 class="fw-bold mb-4">Configuración Agente AI</h5><form method="POST"><input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>"><input type="hidden" name="action" value="save_settings"><div class="mb-3"><label class="form-label">Nombre Agente</label><input type="text" name="agent_name" class="form-control" value="<?php echo htmlspecialchars($settings['agent_name'] ?? 'Vendedor Pro'); ?>"></div><div class="mb-3"><label class="form-label">OpenAI Key</label><input type="password" name="openai_key" class="form-control" value="<?php echo htmlspecialchars($settings['openai_key'] ?? ''); ?>"></div><hr><div class="mb-3"><label class="form-label">Gateway URL</label><input type="url" name="gateway_url" class="form-control" value="<?php echo htmlspecialchars($settings['gateway_url'] ?? ''); ?>"></div><div class="mb-3"><label class="form-label">Gateway Instance</label><input type="text" name="gateway_instance" class="form-control" value="<?php echo htmlspecialchars($settings['gateway_instance'] ?? ''); ?>"></div><div class="mb-3"><label class="form-label">Gateway API Token</label><input type="password" name="gateway_token" class="form-control" value="<?php echo htmlspecialchars($settings['gateway_token'] ?? ''); ?>"></div><button type="submit" class="btn btn-primary px-5">Guardar Todo</button></form></div>
+        <div class="card mx-auto p-4" style="max-width: 800px;"><h6 class="fw-bold mb-3">Configuración de Webhook (Gateway)</h6><p class="small text-muted">Copia esta URL en la configuración de tu Gateway (Evolution API, etc.) para recibir mensajes en tiempo real:</p><div class="input-group"><input type="text" class="form-control form-control-sm" value="<?php echo $full_webhook_url; ?>" readonly><button class="btn btn-sm btn-outline-secondary" onclick="navigator.clipboard.writeText('<?php echo $full_webhook_url; ?>')">Copiar</button></div></div>
         <?php
     }
     ?>

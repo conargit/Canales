@@ -14,3 +14,21 @@
 [Tue May 26 03:52:19 2026] [::1]:49044 Accepted
 [Tue May 26 03:52:19 2026] [::1]:49044 [200]: GET /whatsapp.php?view=settings
 [Tue May 26 03:52:19 2026] [::1]:49044 Closing
+[Tue May 26 04:00:17 2026] [::1]:36338 Accepted
+[Tue May 26 04:00:17 2026] [::1]:36338 [200]: HEAD /whatsapp.php?action=webhook&token=test
+[Tue May 26 04:00:17 2026] [::1]:36338 Closing
+[Tue May 26 04:00:28 2026] [::1]:36580 Accepted
+[Tue May 26 04:00:28 2026] [::1]:36580 [200]: GET /whatsapp.php?view=dashboard
+[Tue May 26 04:00:28 2026] [::1]:36580 Closing
+[Tue May 26 04:00:28 2026] [::1]:36594 Accepted
+[Tue May 26 04:00:28 2026] [::1]:36594 [200]: GET /whatsapp.php?view=training
+[Tue May 26 04:00:28 2026] [::1]:36594 Closing
+[Tue May 26 04:00:28 2026] [::1]:36596 Accepted
+[Tue May 26 04:00:28 2026] [::1]:36596 [200]: GET /whatsapp.php?view=whatsapp
+[Tue May 26 04:00:28 2026] [::1]:36596 Closing
+[Tue May 26 04:00:29 2026] [::1]:36600 Accepted
+[Tue May 26 04:00:29 2026] [::1]:36600 [200]: GET /whatsapp.php?view=chats
+[Tue May 26 04:00:29 2026] [::1]:36600 Closing
+[Tue May 26 04:00:29 2026] [::1]:36610 Accepted
+[Tue May 26 04:00:29 2026] [::1]:36610 [200]: GET /whatsapp.php?view=settings
+[Tue May 26 04:00:29 2026] [::1]:36610 Closing
