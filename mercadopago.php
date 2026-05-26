@@ -4,7 +4,7 @@
  * Sistema de Gestión Logística SaaS para Mercado Libre Flex
  *
  * Versión: 4.0 (Motor GPS Dual, Seguridad Hardened & Auditoría Total)
- * Integrado con MySQL 'qualityexpress' y Tabla 'operaciones'
+ * Todo en un solo archivo: mercadopago.php
  */
 
 session_start();
@@ -53,7 +53,6 @@ try {
     if (!$cols) {
         $db->exec("ALTER TABLE operaciones ADD COLUMN latitud_real DECIMAL(10,8), ADD COLUMN longitud_real DECIMAL(11,8)");
     }
-
 } catch (Exception $e) {
     $db = null;
 }
@@ -69,7 +68,7 @@ if (!isset($_SESSION['configuracion'])) {
         'client_id' => getenv('MELI_CLIENT_ID') ?: '848316273415124',
         'client_secret' => getenv('MELI_CLIENT_SECRET') ?: 'SECRET_KEY',
         'intervalo_cierre' => 15,
-        'validar_gps' => true,
+        'validar_gps' => false,
         'radio_maximo' => 200,
         'modo_oscuro' => true
     ];
@@ -109,15 +108,19 @@ $accion = $_GET['action'] ?? 'inicio';
 
 switch ($accion) {
     case 'obtener_pedidos':
+        if (!isset($_SESSION['access_token'])) { echo json_encode([]); exit; }
         manejarObtenerPedidos();
         break;
     case 'cerrar_individual':
+        if (!isset($_SESSION['access_token'])) { echo json_encode(['success'=>false]); exit; }
         manejarCerrarIndividual($db);
         break;
     case 'api_guardar_ajustes':
+        if (!isset($_SESSION['access_token'])) { echo json_encode(['success'=>false]); exit; }
         manejarGuardarAjustes();
         break;
     case 'obtener_bd':
+        if (!isset($_SESSION['access_token'])) { echo json_encode([]); exit; }
         manejarObtenerBD($db);
         break;
     case 'demo':
@@ -168,7 +171,6 @@ function manejarGuardarAjustes() {
 
 function registrarEnOperaciones($db, $id_meli, $comprador, $direccion, $estado, $lat, $lon, $accion, $resultado, $detalle, $lat_real = null, $lon_real = null) {
     if (!$db) return;
-
     $sql = "INSERT INTO operaciones (id_meli, tipo, origen, modo, comprador, direccion, estado, latitud, longitud, latitud_real, longitud_real, accion, resultado, detalle, ip, user_agent)
             VALUES (:id_meli, 'pedido', 'mercadolibre', :modo, :comprador, :direccion, :estado, :latitud, :longitud, :lat_real, :lon_real, :accion, :resultado, :detalle, :ip, :user_agent)
             ON DUPLICATE KEY UPDATE estado = VALUES(estado), accion = VALUES(accion), resultado = VALUES(resultado), detalle = VALUES(detalle),
@@ -184,11 +186,8 @@ function registrarEnOperaciones($db, $id_meli, $comprador, $direccion, $estado, 
 
 function manejarObtenerPedidos() {
     header('Content-Type: application/json');
-
     $modo = (isset($_SESSION['access_token']) && strpos($_SESSION['access_token'], 'demo_') !== 0) ? 'real' : 'demo';
-
     if ($modo === 'real') {
-        // En un entorno real, buscaríamos envíos Flex activos
         $res = meliRequest("/shipments/search?status=shipped&shipping_method=flex");
         if (isset($res['results'])) {
             $pedidos = array_map(function($s) {
@@ -205,8 +204,7 @@ function manejarObtenerPedidos() {
             exit;
         }
     }
-
-    // Fallback: Mock Data para Demo o error
+    // Fallback Mock
     $pedidos = [
         ['id'=>10201, 'comprador'=>'Juan Pérez', 'destino'=>'Av. Corrientes 1234', 'estado'=>'shipped', 'lat'=>-34.6037, 'lon'=>-58.3816],
         ['id'=>10202, 'comprador'=>'Marta Gómez', 'destino'=>'Sarmiento 151', 'estado'=>'shipped', 'lat'=>-34.6075, 'lon'=>-58.3712],
@@ -222,14 +220,11 @@ function manejarCerrarIndividual($db) {
     if (($d['csrf_token'] ?? '') !== $_SESSION['csrf_token']) {
         echo json_encode(['success'=>false]); exit;
     }
-
     $modo = (isset($_SESSION['access_token']) && strpos($_SESSION['access_token'], 'demo_') !== 0) ? 'real' : 'demo';
     $resultado = 'ok';
     $detalle = ['api' => 'shipped->delivered'];
-
-    if ($modo === 'real' && !empty($_SESSION['access_token'])) {
-        // BYPASS GPS: Inyectamos coordenadas del destino en la llamada API
-        // Mercado Libre Flex requiere status 'delivered' y opcionalmente sub_status
+    if ($modo === 'real') {
+        // BYPASS GPS: Inyectamos coordenadas del destino siempre para Mercado Libre
         $payload = [
             'status' => 'delivered',
             'sub_status' => 'fulfilled',
@@ -239,20 +234,12 @@ function manejarCerrarIndividual($db) {
             ]
         ];
         $res = meliRequest("/shipments/{$d['id']}", 'PUT', $payload);
-
-        if (isset($res['id']) || (isset($res['status']) && $res['status'] === 'delivered')) {
-            $resultado = 'ok';
-        } else {
-            $resultado = 'error';
-        }
+        $resultado = (isset($res['id']) || (isset($res['status']) && $res['status'] === 'delivered')) ? 'ok' : 'error';
         $detalle = $res;
     }
-
     $lat_real = $d['gps_real']['lat'] ?? null;
     $lon_real = $d['gps_real']['lon'] ?? null;
-
     registrarEnOperaciones($db, $d['id'], $d['comprador'], $d['destino'], 'delivered', $d['lat'], $d['lon'], 'cierre_bypass', $resultado, $detalle, $lat_real, $lon_real);
-
     echo json_encode(['success' => ($resultado === 'ok'), 'id' => $d['id'], 'modo' => $modo, 'res' => $detalle]);
     exit;
 }
@@ -282,7 +269,7 @@ function renderizarInicio($config) {
 <body>
     <div class="hero shadow-lg">
         <h1 class="display-4 fw-bold mb-4">SGL <span class="text-primary">PRO</span></h1>
-        <p class="text-secondary mb-5 fs-5">Plataforma Logística Enterprise v3.7.<br>Gestión de Credenciales & Automatización.</p>
+        <p class="text-secondary mb-5 fs-5">Plataforma Logística Enterprise v4.0.<br>Gestión de Credenciales & Automatización.</p>
         <div class="d-flex flex-column gap-3">
             <a href="<?php echo $meli_auth; ?>" class="btn btn-primary btn-lg px-5 py-3 rounded-pill fw-bold">CONECTAR EMPRESA REAL</a>
             <a href="?action=demo" class="btn btn-outline-light btn-lg px-5 py-3 rounded-pill fw-bold">INICIAR MODO DEMO</a>
@@ -300,7 +287,7 @@ function renderizarInterfaz($config, $pagina) {
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8"><title>SGL PRO v3.7 | <?php echo ucfirst($pagina); ?></title>
+    <meta charset="UTF-8"><title>SGL PRO v4.0 | <?php echo ucfirst($pagina); ?></title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <style>
@@ -357,7 +344,7 @@ function renderizarInterfaz($config, $pagina) {
                     </div>
                     <div class="col-lg-4">
                         <h6 class="fw-bold mb-3"><i class="bi bi-terminal-fill me-2"></i>Monitor Real-Time</h6>
-                        <div id="consola">> Listo. Intervalo configurado: <?php echo $ajustes['intervalo_cierre']; ?>s.</div>
+                        <div id="consola">> Listo. Intervalo: <?php echo $ajustes['intervalo_cierre']; ?>s.</div>
                     </div>
                 </div>
 
@@ -367,27 +354,17 @@ function renderizarInterfaz($config, $pagina) {
                         <div class="card p-4 shadow-sm">
                             <h5 class="fw-bold mb-4"><i class="bi bi-shield-lock me-2"></i>Credenciales Mercado Libre</h5>
                             <form id="formAjustes">
-                <div class="mb-3"><label class="small fw-bold">CLIENT_ID (App ID)</label><input type="text" name="client_id" class="form-control" value="<?php echo htmlspecialchars($ajustes['client_id']); ?>"></div>
-                <div class="mb-3"><label class="small fw-bold">CLIENT_SECRET (Secret Key)</label><input type="password" name="client_secret" class="form-control" value="<?php echo htmlspecialchars($ajustes['client_secret']); ?>"></div>
-                                <hr class="my-4">
-                                <h5 class="fw-bold mb-4"><i class="bi bi-clock-history me-2"></i>Tiempos de Operación</h5>
-                <div class="mb-3"><label class="small fw-bold">Intervalo de Cierre Masivo (Segundos)</label><input type="number" name="intervalo_cierre" class="form-control" value="<?php echo htmlspecialchars($ajustes['intervalo_cierre']); ?>"><div class="form-text">Tiempo de espera entre el cierre de cada pedido.</div></div>
+                <div class="mb-3"><label class="small fw-bold">CLIENT_ID</label><input type="text" name="client_id" class="form-control" value="<?php echo htmlspecialchars($ajustes['client_id']); ?>"></div>
+                <div class="mb-3"><label class="small fw-bold">CLIENT_SECRET</label><input type="password" name="client_secret" class="form-control" value="<?php echo htmlspecialchars($ajustes['client_secret']); ?>"></div>
                                 <hr class="my-4">
                                 <h5 class="fw-bold mb-4"><i class="bi bi-geo-alt-fill me-2"></i>Control de Geolocalización</h5>
                                 <div class="form-check form-switch mb-3">
                                     <input class="form-check-input" type="checkbox" name="validar_gps" id="validarGPS" <?php echo ($ajustes['validar_gps'] ?? false) ? 'checked' : ''; ?>>
                                     <label class="form-check-label fw-bold small" for="validarGPS">Validación de GPS Estricta</label>
-                                    <div class="form-text small">Si se activa, el repartidor DEBE estar cerca del destino para cerrar.</div>
                                 </div>
-                <div class="mb-4"><label class="small fw-bold">Radio Máximo Permitido (Metros)</label><input type="number" name="radio_maximo" class="form-control" value="<?php echo htmlspecialchars($ajustes['radio_maximo'] ?? 200); ?>"></div>
+                <div class="mb-4"><label class="small fw-bold">Radio Máximo (Metros)</label><input type="number" name="radio_maximo" class="form-control" value="<?php echo htmlspecialchars($ajustes['radio_maximo'] ?? 200); ?>"></div>
                                 <button type="submit" class="btn btn-primary fw-bold w-100 py-2 rounded-3 shadow-sm">GUARDAR CONFIGURACIÓN</button>
                             </form>
-                        </div>
-                    </div>
-                    <div class="col-lg-6">
-                        <div class="card p-4 bg-primary text-white shadow-lg border-0">
-                            <h6 class="fw-bold mb-3"><i class="bi bi-info-circle-fill me-2"></i>Configuración de Sistema</h6>
-                            <p class="small opacity-75">Las credenciales configuradas se utilizan para el flujo de autorización OAuth2. Asegúrese de que su App en Mercado Libre tenga configurada la Redirect URI correcta para que la conexión sea exitosa.</p>
                         </div>
                     </div>
                 </div>
@@ -421,65 +398,38 @@ function renderizarInterfaz($config, $pagina) {
             const tbody = document.getElementById('tablaMain') || document.getElementById('tablaBD');
             if (!tbody) return;
             tbody.textContent = "";
-
             envios.forEach(e => {
                 const tr = document.createElement('tr');
                 const id = e.id || e.id_meli;
-
-                // Checkbox
-                const td1 = document.createElement('td');
-                td1.className = "ps-4";
-                const chk = document.createElement('input');
-                chk.type = "checkbox"; chk.className = "check-item form-check-input"; chk.value = id;
+                const td1 = document.createElement('td'); td1.className = "ps-4";
+                const chk = document.createElement('input'); chk.type = "checkbox"; chk.className = "check-item form-check-input"; chk.value = id;
                 td1.appendChild(chk);
-
-                // ID
-                const td2 = document.createElement('td');
-                td2.className = "fw-bold";
-                td2.textContent = `#${id}`;
-
-                // Info Cliente (XSS Protected)
+                const td2 = document.createElement('td'); td2.className = "fw-bold"; td2.textContent = `#${id}`;
                 const td3 = document.createElement('td');
                 const div1 = document.createElement('div'); div1.className = "small fw-bold"; div1.textContent = e.comprador;
                 const div2 = document.createElement('div'); div2.className = "small text-muted"; div2.textContent = e.destino || e.direccion;
-                td3.appendChild(div1); td3.appendChild(div2);
-
-                // Estado
+                td3.append(div1, div2);
                 const td4 = document.createElement('td');
-                const span = document.createElement('span');
-                span.id = `st-${id}`;
-                span.className = `status-badge st-${e.estado}`;
-                span.textContent = e.estado === 'shipped' ? 'EN CAMINO' : 'CERRADO';
+                const span = document.createElement('span'); span.id = `st-${id}`; span.className = `status-badge st-${e.estado}`; span.textContent = e.estado === 'shipped' ? 'EN CAMINO' : 'CERRADO';
                 td4.appendChild(span);
-
                 tr.append(td1, td2, td3, td4);
-
                 if ('<?php echo $pagina; ?>' === 'panel') {
                     const td5 = document.createElement('td');
-                    const btn = document.createElement('button');
-                    btn.className = "btn btn-sm btn-outline-primary fw-bold px-3 rounded-pill";
-                    btn.textContent = "Cerrar";
+                    const btn = document.createElement('button'); btn.className = "btn btn-sm btn-outline-primary fw-bold px-3 rounded-pill"; btn.textContent = "Cerrar";
                     btn.onclick = () => procesarCierre(id);
-                    td5.appendChild(btn);
-                    tr.appendChild(td5);
+                    td5.appendChild(btn); tr.appendChild(td5);
                 }
-
                 if ('<?php echo $pagina; ?>' === 'bd') {
-                    const td5 = document.createElement('td');
-                    const small1 = document.createElement('small'); small1.className = "fw-bold"; small1.textContent = e.accion;
-                    td5.appendChild(small1);
-                    const td6 = document.createElement('td');
-                    const small2 = document.createElement('small'); small2.textContent = e.fecha_registro;
-                    td6.appendChild(small2);
+                    const td5 = document.createElement('td'); const sm1 = document.createElement('small'); sm1.className = "fw-bold"; sm1.textContent = e.accion; td5.appendChild(sm1);
+                    const td6 = document.createElement('td'); const sm2 = document.createElement('small'); sm2.textContent = e.fecha_registro; td6.appendChild(sm2);
                     tr.append(td5, td6);
                 }
-
                 tbody.appendChild(tr);
             });
         }
 
         async function getPosicion() {
-            return new Promise((resolve, reject) => {
+            return new Promise((resolve) => {
                 if (!navigator.geolocation) return resolve(null);
                 navigator.geolocation.getCurrentPosition(
                     p => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
@@ -490,39 +440,35 @@ function renderizarInterfaz($config, $pagina) {
         }
 
         function calcularDistancia(lat1, lon1, lat2, lon2) {
-            const R = 6371e3; // Radio de la Tierra en metros
+            const R = 6371e3;
             const p1 = lat1 * Math.PI/180;
             const p2 = lat2 * Math.PI/180;
             const dLat = (lat2-lat1) * Math.PI/180;
             const dLon = (lon2-lon1) * Math.PI/180;
-            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                      Math.cos(p1) * Math.cos(p2) *
-                      Math.sin(dLon/2) * Math.sin(dLon/2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            return R * c;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dLon/2) * Math.sin(dLon/2);
+            return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
         }
 
         async function procesarCierre(id) {
             const e = envios.find(x => (x.id || x.id_meli) == id);
-            const bypass_active = !GPS_STRICT;
-            log(`Iniciando cierre de #${id} [${bypass_active ? 'Modo Bypass' : 'Modo Estricto'}]...`);
-
-            const gps = await getPosicion();
-            if (gps) {
-                const dist = calcularDistancia(gps.lat, gps.lon, e.lat, e.lon);
-                log(`GPS: ${gps.lat.toFixed(4)}, ${gps.lon.toFixed(4)} (Distancia: ${Math.round(dist)}m)`, 'info');
-
-                if (GPS_STRICT && dist > MAX_RADIO) {
-                    log(`ERROR: Demasiado lejos del destino (${Math.round(dist)}m > ${MAX_RADIO}m).`, 'error');
-                    alert(`Estás a ${Math.round(dist)}m del destino. Debes estar a menos de ${MAX_RADIO}m.`);
-                    return false;
+            log(`Cerrando #${id} [${GPS_STRICT ? 'Modo Estricto' : 'Modo Bypass'}]...`);
+            let gps = null;
+            if (GPS_STRICT) {
+                gps = await getPosicion();
+                if (gps) {
+                    const dist = calcularDistancia(gps.lat, gps.lon, e.lat, e.lon);
+                    log(`GPS Real: ${gps.lat.toFixed(4)}, ${gps.lon.toFixed(4)} (Dist: ${Math.round(dist)}m)`, 'info');
+                    if (dist > MAX_RADIO) {
+                        log(`BLOQUEADO: Muy lejos (${Math.round(dist)}m > ${MAX_RADIO}m).`, 'error');
+                        alert(`Demasiado lejos (${Math.round(dist)}m).`); return false;
+                    }
+                } else {
+                    log(`ERROR: GPS obligatorio.`, 'error'); alert("GPS obligatorio."); return false;
                 }
-            } else if (GPS_STRICT) {
-                log(`ERROR: El GPS es obligatorio en Modo Estricto.`, 'error');
-                alert("Debes activar el GPS para cerrar entregas.");
-                return false;
+            } else {
+                log(`Bypass Activo: Inyectando coordenadas de destino...`, 'warning');
+                gps = await getPosicion(); // Audit only
             }
-
             const res = await fetch('?action=cerrar_individual', {
                 method: 'POST', body: JSON.stringify({ ...e, csrf_token: CSRF, gps_real: gps })
             });
@@ -530,7 +476,7 @@ function renderizarInterfaz($config, $pagina) {
             if (r.success) {
                 const badge = document.getElementById(`st-${id}`);
                 if (badge) { badge.className = 'status-badge st-delivered'; badge.textContent = 'CERRADO'; }
-                log(`Éxito en #${id}: Pedido ${bypass_active ? 'Bypasseado' : 'Validado'} correctamente.`, 'success');
+                log(`Éxito en #${id}: Pedido cerrado.`, 'success');
             }
             return r.success;
         }
@@ -538,24 +484,19 @@ function renderizarInterfaz($config, $pagina) {
         async function cierreMasivo() {
             const sel = Array.from(document.querySelectorAll('.check-item:checked')).map(c => c.value);
             if (!sel.length) return alert('Seleccione pedidos.');
-            const btn = document.getElementById('btnBulk');
-            btn.disabled = true;
-            log(`Ejecutando proceso masivo (${sel.length} pedidos)...`);
+            const btn = document.getElementById('btnBulk'); btn.disabled = true;
+            log(`Proceso masivo (${sel.length} pedidos)...`);
             for (let i = 0; i < sel.length; i++) {
                 await procesarCierre(sel[i]);
-                if (i < sel.length - 1 && INT_CONFIG > 0) {
-                    log(`Espera de seguridad: ${INT_CONFIG}s...`);
-                    await new Promise(r => setTimeout(r, INT_CONFIG * 1000));
-                }
+                if (i < sel.length - 1 && INT_CONFIG > 0) { await new Promise(r => setTimeout(r, INT_CONFIG * 1000)); }
             }
-            btn.disabled = false;
-            log('Operación finalizada.', 'success');
+            btn.disabled = false; log('Finalizado.', 'success');
         }
 
         function log(msg, type='info') {
             const c = document.getElementById('consola'); if(!c) return;
             const d = document.createElement('div');
-            d.style.color = type === 'success' ? '#10b981' : (type === 'error' ? '#ef4444' : '#94a3b8');
+            d.style.color = type === 'success' ? '#10b981' : (type === 'error' ? '#ef4444' : (type === 'warning' ? '#f59e0b' : '#94a3b8'));
             d.textContent = `[${new Date().toLocaleTimeString()}] > ${msg}`;
             c.appendChild(d); c.scrollTop = c.scrollHeight;
         }
@@ -563,15 +504,9 @@ function renderizarInterfaz($config, $pagina) {
         if(document.getElementById('formAjustes')) document.getElementById('formAjustes').onsubmit = async (e) => {
             e.preventDefault();
             const fd = new FormData(e.target);
-            const config = {
-                client_id: fd.get('client_id'),
-                client_secret: fd.get('client_secret'),
-                intervalo_cierre: fd.get('intervalo_cierre'),
-                validar_gps: fd.get('validar_gps') === 'on',
-                radio_maximo: fd.get('radio_maximo')
-            };
+            const config = { client_id: fd.get('client_id'), client_secret: fd.get('client_secret'), intervalo_cierre: fd.get('intervalo_cierre'), validar_gps: fd.get('validar_gps') === 'on', radio_maximo: fd.get('radio_maximo') };
             const res = await fetch('?action=api_guardar_ajustes', { method:'POST', body: JSON.stringify({ config, csrf_token: CSRF }) });
-            if((await res.json()).success) alert('¡Ajustes guardados con éxito!');
+            if((await res.json()).success) alert('¡Ajustes guardados!');
         };
 
         document.getElementById('selectAll').addEventListener('change', e => { document.querySelectorAll('.check-item').forEach(c => c.checked = e.target.checked); });
