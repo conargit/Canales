@@ -1,34 +1,63 @@
-[Tue May 26 03:52:13 2026] PHP 8.3.6 Development Server (http://localhost:8000) started
-[Tue May 26 03:52:18 2026] [::1]:49004 Accepted
-[Tue May 26 03:52:18 2026] [::1]:49004 [200]: GET /whatsapp.php?view=dashboard
-[Tue May 26 03:52:18 2026] [::1]:49004 Closing
-[Tue May 26 03:52:18 2026] [::1]:49018 Accepted
-[Tue May 26 03:52:18 2026] [::1]:49018 [200]: GET /whatsapp.php?view=training
-[Tue May 26 03:52:18 2026] [::1]:49018 Closing
-[Tue May 26 03:52:19 2026] [::1]:49024 Accepted
-[Tue May 26 03:52:19 2026] [::1]:49024 [200]: GET /whatsapp.php?view=whatsapp
-[Tue May 26 03:52:19 2026] [::1]:49024 Closing
-[Tue May 26 03:52:19 2026] [::1]:49030 Accepted
-[Tue May 26 03:52:19 2026] [::1]:49030 [200]: GET /whatsapp.php?view=chats
-[Tue May 26 03:52:19 2026] [::1]:49030 Closing
-[Tue May 26 03:52:19 2026] [::1]:49044 Accepted
-[Tue May 26 03:52:19 2026] [::1]:49044 [200]: GET /whatsapp.php?view=settings
-[Tue May 26 03:52:19 2026] [::1]:49044 Closing
-[Tue May 26 04:00:17 2026] [::1]:36338 Accepted
-[Tue May 26 04:00:17 2026] [::1]:36338 [200]: HEAD /whatsapp.php?action=webhook&token=test
-[Tue May 26 04:00:17 2026] [::1]:36338 Closing
-[Tue May 26 04:00:28 2026] [::1]:36580 Accepted
-[Tue May 26 04:00:28 2026] [::1]:36580 [200]: GET /whatsapp.php?view=dashboard
-[Tue May 26 04:00:28 2026] [::1]:36580 Closing
-[Tue May 26 04:00:28 2026] [::1]:36594 Accepted
-[Tue May 26 04:00:28 2026] [::1]:36594 [200]: GET /whatsapp.php?view=training
-[Tue May 26 04:00:28 2026] [::1]:36594 Closing
-[Tue May 26 04:00:28 2026] [::1]:36596 Accepted
-[Tue May 26 04:00:28 2026] [::1]:36596 [200]: GET /whatsapp.php?view=whatsapp
-[Tue May 26 04:00:28 2026] [::1]:36596 Closing
-[Tue May 26 04:00:29 2026] [::1]:36600 Accepted
-[Tue May 26 04:00:29 2026] [::1]:36600 [200]: GET /whatsapp.php?view=chats
-[Tue May 26 04:00:29 2026] [::1]:36600 Closing
-[Tue May 26 04:00:29 2026] [::1]:36610 Accepted
-[Tue May 26 04:00:29 2026] [::1]:36610 [200]: GET /whatsapp.php?view=settings
-[Tue May 26 04:00:29 2026] [::1]:36610 Closing
+[Tue May 26 04:11:00 2026] PHP 8.3.6 Development Server (http://localhost:8000) started
+[Tue May 26 04:11:15 2026] [::1]:42936 Accepted
+[Tue May 26 04:11:15 2026] [::1]:42936 [200]: GET /whatsapp.php?view=login
+[Tue May 26 04:11:15 2026] [::1]:42936 Closing
+[Tue May 26 04:11:59 2026] [::1]:54326 Accepted
+[Tue May 26 04:11:59 2026] [::1]:54326 [200]: GET /whatsapp.php
+[Tue May 26 04:11:59 2026] [::1]:54326 Closing
+[Tue May 26 04:14:19 2026] [::1]:35108 Accepted
+[Tue May 26 04:14:19 2026] PHP Warning:  Undefined variable $dbname in /app/whatsapp.php on line 164
+[Tue May 26 04:14:19 2026] [::1]:35108 [200]: GET /whatsapp.php?view=login
+[Tue May 26 04:14:19 2026] [::1]:35108 Closing
+[Tue May 26 04:15:04 2026] [::1]:44476 Accepted
+[Tue May 26 04:15:04 2026] PHP Warning:  Undefined variable $dbname in /app/whatsapp.php on line 164
+[Tue May 26 04:15:04 2026] [::1]:44476 [200]: GET /whatsapp.php
+[Tue May 26 04:15:04 2026] [::1]:44476 Closing
+[Tue May 26 04:15:18 2026] [::1]:38430 Accepted
+[Tue May 26 04:15:18 2026] [::1]:38430 [200]: GET /whatsapp.php
+[Tue May 26 04:15:18 2026] [::1]:38430 Closing
+[Tue May 26 04:16:08 2026] [::1]:42002 Accepted
+[Tue May 26 04:16:08 2026] [::1]:42002 [200]: GET /whatsapp.php
+[Tue May 26 04:16:08 2026] [::1]:42002 Closing
+[Tue May 26 04:16:55 2026] [::1]:58598 Accepted
+[Tue May 26 04:16:55 2026] [::1]:58598 [200]: GET /whatsapp.php?view=login
+[Tue May 26 04:16:55 2026] [::1]:58598 Closing
+[Tue May 26 04:17:59 2026] [::1]:45708 Accepted
+[Tue May 26 04:17:59 2026] [::1]:45708 [200]: GET /whatsapp.php?view=login
+[Tue May 26 04:17:59 2026] [::1]:45708 Closing
+[Tue May 26 04:17:59 2026] [::1]:45714 Accepted
+[Tue May 26 04:17:59 2026] [::1]:45714 [302]: POST /whatsapp.php?view=login
+[Tue May 26 04:17:59 2026] [::1]:45714 Closing
+[Tue May 26 04:17:59 2026] [::1]:45724 Accepted
+[Tue May 26 04:17:59 2026] [::1]:45724 [200]: GET /whatsapp.php?view=dashboard
+[Tue May 26 04:17:59 2026] [::1]:45724 Closing
+[Tue May 26 04:18:02 2026] [::1]:45740 Accepted
+[Tue May 26 04:18:02 2026] [::1]:45740 [200]: GET /whatsapp.php?view=instances
+[Tue May 26 04:18:02 2026] [::1]:45740 Closing
+[Tue May 26 04:19:17 2026] [::1]:58196 Accepted
+[Tue May 26 04:19:17 2026] [::1]:58196 [200]: GET /whatsapp.php?view=login
+[Tue May 26 04:19:17 2026] [::1]:58196 Closing
+[Tue May 26 04:19:17 2026] [::1]:58212 Accepted
+[Tue May 26 04:19:18 2026] [::1]:58212 [302]: POST /whatsapp.php?view=login
+[Tue May 26 04:19:18 2026] [::1]:58212 Closing
+[Tue May 26 04:19:18 2026] [::1]:58228 Accepted
+[Tue May 26 04:19:18 2026] [::1]:58228 [200]: GET /whatsapp.php?view=dashboard
+[Tue May 26 04:19:18 2026] [::1]:58228 Closing
+[Tue May 26 04:19:20 2026] [::1]:58236 Accepted
+[Tue May 26 04:19:20 2026] [::1]:58236 [200]: GET /whatsapp.php?view=instances
+[Tue May 26 04:19:20 2026] [::1]:58236 Closing
+[Tue May 26 04:19:35 2026] [::1]:49420 Accepted
+[Tue May 26 04:19:35 2026] [::1]:49420 [200]: GET /whatsapp.php?view=login
+[Tue May 26 04:19:35 2026] [::1]:49420 Closing
+[Tue May 26 04:19:35 2026] [::1]:49428 Accepted
+[Tue May 26 04:19:35 2026] [::1]:49428 [302]: POST /whatsapp.php?view=login
+[Tue May 26 04:19:35 2026] [::1]:49428 Closing
+[Tue May 26 04:19:35 2026] [::1]:49436 Accepted
+[Tue May 26 04:19:35 2026] [::1]:49436 [200]: GET /whatsapp.php?view=dashboard
+[Tue May 26 04:19:35 2026] [::1]:49436 Closing
+[Tue May 26 04:19:37 2026] [::1]:33226 Accepted
+[Tue May 26 04:19:37 2026] [::1]:33226 [200]: GET /whatsapp.php?view=instances
+[Tue May 26 04:19:37 2026] [::1]:33226 Closing
+[Tue May 26 04:19:38 2026] [::1]:33242 Accepted
+[Tue May 26 04:19:38 2026] [::1]:33242 [200]: GET /whatsapp.php?view=training
+[Tue May 26 04:19:38 2026] [::1]:33242 Closing
