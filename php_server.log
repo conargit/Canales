@@ -1,0 +1,13 @@
+[Tue May 26 03:18:13 2026] PHP 8.3.6 Development Server (http://localhost:8000) started
+[Tue May 26 03:18:17 2026] [::1]:58266 Accepted
+[Tue May 26 03:18:17 2026] [::1]:58266 [302]: GET /mercadopago.php?action=demo
+[Tue May 26 03:18:17 2026] [::1]:58266 Closing
+[Tue May 26 03:18:17 2026] [::1]:58268 Accepted
+[Tue May 26 03:18:17 2026] [::1]:58268 [200]: GET /mercadopago.php?action=panel
+[Tue May 26 03:18:17 2026] [::1]:58268 Closing
+[Tue May 26 03:18:17 2026] [::1]:58280 Accepted
+[Tue May 26 03:18:17 2026] [::1]:58280 [200]: GET /mercadopago.php?action=obtener_pedidos
+[Tue May 26 03:18:17 2026] [::1]:58280 Closing
+[Tue May 26 03:18:17 2026] [::1]:58286 Accepted
+[Tue May 26 03:18:17 2026] [::1]:58286 [200]: POST /mercadopago.php?action=cerrar_individual
+[Tue May 26 03:18:17 2026] [::1]:58286 Closing
