@@ -1,9 +1,9 @@
 <?php
 /**
- * SGL PRO ENTERPRISE - v3.7 Final Pro
+ * SGL PRO ENTERPRISE - v4.0 Final Perfecto
  * Sistema de Gestión Logística SaaS para Mercado Libre Flex
  *
- * Versión: 3.7 (Módulo de Ajustes Funcional & Configuración Dinámica)
+ * Versión: 4.0 (Motor GPS Dual, Seguridad Hardened & Auditoría Total)
  * Integrado con MySQL 'qualityexpress' y Tabla 'operaciones'
  */
 
@@ -341,7 +341,7 @@ function renderizarInterfaz($config, $pagina) {
                         <button id="btnBulk" onclick="cierreMasivo()" class="btn btn-primary fw-bold px-4 rounded-pill shadow-sm"><i class="bi bi-rocket-takeoff me-2"></i>EJECUTAR CIERRE AUTOMÁTICO</button>
                     <?php endif; ?>
                     <span class="badge <?php echo $modo === 'REAL' ? 'bg-success' : 'bg-warning text-dark'; ?> border p-2 rounded-3 shadow-sm d-flex align-items-center fw-bold">MODO <?php echo $modo; ?></span>
-                    <span class="badge bg-white text-dark border p-2 rounded-3 shadow-sm d-flex align-items-center">v3.7 Enterprise</span>
+                    <span class="badge bg-white text-dark border p-2 rounded-3 shadow-sm d-flex align-items-center">v4.0 Perfecto</span>
                 </div>
             </div>
 
