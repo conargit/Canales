@@ -137,11 +137,11 @@ function getDb() {
             $db->exec("INSERT INTO usuarios (nombre, email, password, id_rol, id_sucursal) VALUES ('Administrador', 'admin@admin.com', '$pass', 1, 1)");
         }
 
-        // Seed webhook token if not exists
-        $stmt = $db->prepare("SELECT COUNT(*) FROM ajustes WHERE clave = 'webhook_token'");
+        // Seed global webhook token if not exists
+        $stmt = $db->prepare("SELECT COUNT(*) FROM ajustes WHERE clave = 'webhook_token' AND id_sucursal = 0");
         $stmt->execute();
         if ($stmt->fetchColumn() == 0) {
-            $db->prepare("INSERT INTO ajustes (clave, valor) VALUES ('webhook_token', ?)")->execute([bin2hex(random_bytes(16))]);
+            $db->prepare("INSERT INTO ajustes (clave, valor, id_sucursal) VALUES ('webhook_token', ?, 0)")->execute([bin2hex(random_bytes(16))]);
         }
 
         return $db;
