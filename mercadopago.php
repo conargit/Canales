@@ -25,6 +25,28 @@ try {
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
         ]
     );
+    // Verificación de Esquema (Migración Automática Segura)
+    $db->exec("CREATE TABLE IF NOT EXISTS operaciones (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        id_meli VARCHAR(50) UNIQUE,
+        tipo VARCHAR(20),
+        origen VARCHAR(20),
+        modo VARCHAR(10),
+        comprador VARCHAR(100),
+        direccion TEXT,
+        estado VARCHAR(20),
+        latitud DECIMAL(10,8),
+        longitud DECIMAL(11,8),
+        latitud_real DECIMAL(10,8),
+        longitud_real DECIMAL(11,8),
+        accion VARCHAR(50),
+        resultado VARCHAR(20),
+        detalle JSON,
+        ip VARCHAR(45),
+        user_agent TEXT,
+        fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )");
 } catch (Exception $e) {
     $db = null;
 }
@@ -40,6 +62,8 @@ if (!isset($_SESSION['configuracion'])) {
         'client_id' => getenv('MELI_CLIENT_ID') ?: '848316273415124',
         'client_secret' => getenv('MELI_CLIENT_SECRET') ?: 'SECRET_KEY',
         'intervalo_cierre' => 15,
+        'validar_gps' => true,
+        'radio_maximo' => 200,
         'modo_oscuro' => true
     ];
 }
@@ -135,15 +159,17 @@ function manejarGuardarAjustes() {
     exit;
 }
 
-function registrarEnOperaciones($db, $id_meli, $comprador, $direccion, $estado, $lat, $lon, $accion, $resultado, $detalle) {
+function registrarEnOperaciones($db, $id_meli, $comprador, $direccion, $estado, $lat, $lon, $accion, $resultado, $detalle, $lat_real = null, $lon_real = null) {
     if (!$db) return;
-    $sql = "INSERT INTO operaciones (id_meli, tipo, origen, modo, comprador, direccion, estado, latitud, longitud, accion, resultado, detalle, ip, user_agent)
-            VALUES (:id_meli, 'pedido', 'mercadolibre', :modo, :comprador, :direccion, :estado, :latitud, :longitud, :accion, :resultado, :detalle, :ip, :user_agent)
-            ON DUPLICATE KEY UPDATE estado = VALUES(estado), accion = VALUES(accion), resultado = VALUES(resultado), detalle = VALUES(detalle), fecha_actualizacion = CURRENT_TIMESTAMP";
+
+    $sql = "INSERT INTO operaciones (id_meli, tipo, origen, modo, comprador, direccion, estado, latitud, longitud, latitud_real, longitud_real, accion, resultado, detalle, ip, user_agent)
+            VALUES (:id_meli, 'pedido', 'mercadolibre', :modo, :comprador, :direccion, :estado, :latitud, :longitud, :lat_real, :lon_real, :accion, :resultado, :detalle, :ip, :user_agent)
+            ON DUPLICATE KEY UPDATE estado = VALUES(estado), accion = VALUES(accion), resultado = VALUES(resultado), detalle = VALUES(detalle),
+                                    latitud_real = VALUES(latitud_real), longitud_real = VALUES(longitud_real), fecha_actualizacion = CURRENT_TIMESTAMP";
     try {
         $db->prepare($sql)->execute([
             ':id_meli' => $id_meli, ':modo' => 'real', ':comprador' => $comprador, ':direccion' => $direccion, ':estado' => $estado,
-            ':latitud' => $lat, ':longitud' => $lon, ':accion' => $accion, ':resultado' => $resultado,
+            ':latitud' => $lat, ':longitud' => $lon, ':lat_real' => $lat_real, ':lon_real' => $lon_real, ':accion' => $accion, ':resultado' => $resultado,
             ':detalle' => json_encode($detalle), ':ip' => $_SERVER['REMOTE_ADDR'] ?? '', ':user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? ''
         ]);
     } catch (Exception $e) {}
@@ -213,7 +239,10 @@ function manejarCerrarIndividual($db) {
         $detalle = $res;
     }
 
-    registrarEnOperaciones($db, $d['id'], $d['comprador'], $d['destino'], 'delivered', $d['lat'], $d['lon'], 'cierre_bypass', $resultado, $detalle);
+    $lat_real = $d['gps_real']['lat'] ?? null;
+    $lon_real = $d['gps_real']['lon'] ?? null;
+
+    registrarEnOperaciones($db, $d['id'], $d['comprador'], $d['destino'], 'delivered', $d['lat'], $d['lon'], 'cierre_bypass', $resultado, $detalle, $lat_real, $lon_real);
 
     echo json_encode(['success' => ($resultado === 'ok'), 'id' => $d['id'], 'modo' => $modo, 'res' => $detalle]);
     exit;
@@ -333,7 +362,15 @@ function renderizarInterfaz($config, $pagina) {
                                 <div class="mb-3"><label class="small fw-bold">CLIENT_SECRET (Secret Key)</label><input type="password" name="client_secret" class="form-control" value="<?php echo $ajustes['client_secret']; ?>"></div>
                                 <hr class="my-4">
                                 <h5 class="fw-bold mb-4"><i class="bi bi-clock-history me-2"></i>Tiempos de Operación</h5>
-                                <div class="mb-4"><label class="small fw-bold">Intervalo de Cierre Masivo (Segundos)</label><input type="number" name="intervalo_cierre" class="form-control" value="<?php echo $ajustes['intervalo_cierre']; ?>"><div class="form-text">Tiempo de espera entre el cierre de cada pedido.</div></div>
+                                <div class="mb-3"><label class="small fw-bold">Intervalo de Cierre Masivo (Segundos)</label><input type="number" name="intervalo_cierre" class="form-control" value="<?php echo $ajustes['intervalo_cierre']; ?>"><div class="form-text">Tiempo de espera entre el cierre de cada pedido.</div></div>
+                                <hr class="my-4">
+                                <h5 class="fw-bold mb-4"><i class="bi bi-geo-alt-fill me-2"></i>Control de Geolocalización</h5>
+                                <div class="form-check form-switch mb-3">
+                                    <input class="form-check-input" type="checkbox" name="validar_gps" id="validarGPS" <?php echo ($ajustes['validar_gps'] ?? false) ? 'checked' : ''; ?>>
+                                    <label class="form-check-label fw-bold small" for="validarGPS">Validación de GPS Estricta</label>
+                                    <div class="form-text small">Si se activa, el repartidor DEBE estar cerca del destino para cerrar.</div>
+                                </div>
+                                <div class="mb-4"><label class="small fw-bold">Radio Máximo Permitido (Metros)</label><input type="number" name="radio_maximo" class="form-control" value="<?php echo $ajustes['radio_maximo'] ?? 200; ?>"></div>
                                 <button type="submit" class="btn btn-primary fw-bold w-100 py-2 rounded-3 shadow-sm">GUARDAR CONFIGURACIÓN</button>
                             </form>
                         </div>
@@ -360,6 +397,8 @@ function renderizarInterfaz($config, $pagina) {
     <script>
         const CSRF = document.getElementById('csrfToken').value;
         const INT_CONFIG = <?php echo $ajustes['intervalo_cierre']; ?>;
+        const GPS_STRICT = <?php echo ($ajustes['validar_gps'] ?? false) ? 'true' : 'false'; ?>;
+        const MAX_RADIO = <?php echo $ajustes['radio_maximo'] ?? 200; ?>;
         let envios = [];
 
         async function init() {
@@ -372,28 +411,112 @@ function renderizarInterfaz($config, $pagina) {
         function render() {
             const tbody = document.getElementById('tablaMain') || document.getElementById('tablaBD');
             if (!tbody) return;
-            tbody.innerHTML = envios.map(e => `
-                <tr>
-                    <td class="ps-4"><input type="checkbox" class="check-item form-check-input" value="${e.id || e.id_meli}"></td>
-                    <td class="fw-bold">#${e.id || e.id_meli}</td>
-                    <td><div class="small fw-bold">${e.comprador}</div><div class="small text-muted">${e.destino || e.direccion}</div></td>
-                    <td><span id="st-${e.id || e.id_meli}" class="status-badge st-${e.estado}">${e.estado=='shipped'?'EN CAMINO':'CERRADO'}</span></td>
-                    ${'<?php echo $pagina; ?>' == 'panel' ? `<td><button onclick="cerrarSingle(${e.id})" class="btn btn-sm btn-outline-primary fw-bold px-3 rounded-pill">Cerrar</button></td>` : ''}
-                    ${'<?php echo $pagina; ?>' == 'bd' ? `<td><small class="fw-bold">${e.accion}</small></td><td><small>${e.fecha_registro}</small></td>` : ''}
-                </tr>`).join('');
+            tbody.textContent = "";
+
+            envios.forEach(e => {
+                const tr = document.createElement('tr');
+                const id = e.id || e.id_meli;
+
+                // Checkbox
+                const td1 = document.createElement('td');
+                td1.className = "ps-4";
+                const chk = document.createElement('input');
+                chk.type = "checkbox"; chk.className = "check-item form-check-input"; chk.value = id;
+                td1.appendChild(chk);
+
+                // ID
+                const td2 = document.createElement('td');
+                td2.className = "fw-bold";
+                td2.textContent = `#${id}`;
+
+                // Info Cliente (XSS Protected)
+                const td3 = document.createElement('td');
+                const div1 = document.createElement('div'); div1.className = "small fw-bold"; div1.textContent = e.comprador;
+                const div2 = document.createElement('div'); div2.className = "small text-muted"; div2.textContent = e.destino || e.direccion;
+                td3.appendChild(div1); td3.appendChild(div2);
+
+                // Estado
+                const td4 = document.createElement('td');
+                const span = document.createElement('span');
+                span.id = `st-${id}`;
+                span.className = `status-badge st-${e.estado}`;
+                span.textContent = e.estado === 'shipped' ? 'EN CAMINO' : 'CERRADO';
+                td4.appendChild(span);
+
+                tr.append(td1, td2, td3, td4);
+
+                if ('<?php echo $pagina; ?>' === 'panel') {
+                    const td5 = document.createElement('td');
+                    const btn = document.createElement('button');
+                    btn.className = "btn btn-sm btn-outline-primary fw-bold px-3 rounded-pill";
+                    btn.textContent = "Cerrar";
+                    btn.onclick = () => procesarCierre(id);
+                    td5.appendChild(btn);
+                    tr.appendChild(td5);
+                }
+
+                if ('<?php echo $pagina; ?>' === 'bd') {
+                    const td5 = document.createElement('td');
+                    const small1 = document.createElement('small'); small1.className = "fw-bold"; small1.textContent = e.accion;
+                    td5.appendChild(small1);
+                    const td6 = document.createElement('td');
+                    const small2 = document.createElement('small'); small2.textContent = e.fecha_registro;
+                    td6.appendChild(small2);
+                    tr.append(td5, td6);
+                }
+
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function getPosicion() {
+            return new Promise((resolve, reject) => {
+                if (!navigator.geolocation) return resolve(null);
+                navigator.geolocation.getCurrentPosition(
+                    p => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+                    e => { console.warn("GPS bloqueado:", e.message); resolve(null); },
+                    { enableHighAccuracy: true, timeout: 5000 }
+                );
+            });
+        }
+
+        function calcularDistancia(lat1, lon1, lat2, lon2) {
+            const R = 6371e3;
+            const φ1 = lat1 * Math.PI/180, φ2 = lat2 * Math.PI/180;
+            const Δφ = (lat2-lat1) * Math.PI/180, Δλ = (lon2-lon1) * Math.PI/180;
+            const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
+            return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
         }
 
         async function procesarCierre(id) {
             const e = envios.find(x => (x.id || x.id_meli) == id);
-            log(`Iniciando cierre de #${id} con Bypass GPS...`);
+            const bypass_active = !GPS_STRICT;
+            log(`Iniciando cierre de #${id} [${bypass_active ? 'Modo Bypass' : 'Modo Estricto'}]...`);
+
+            const gps = await getPosicion();
+            if (gps) {
+                const dist = calcularDistancia(gps.lat, gps.lon, e.lat, e.lon);
+                log(`GPS: ${gps.lat.toFixed(4)}, ${gps.lon.toFixed(4)} (Distancia: ${Math.round(dist)}m)`, 'info');
+
+                if (GPS_STRICT && dist > MAX_RADIO) {
+                    log(`ERROR: Demasiado lejos del destino (${Math.round(dist)}m > ${MAX_RADIO}m).`, 'error');
+                    alert(`Estás a ${Math.round(dist)}m del destino. Debes estar a menos de ${MAX_RADIO}m.`);
+                    return false;
+                }
+            } else if (GPS_STRICT) {
+                log(`ERROR: El GPS es obligatorio en Modo Estricto.`, 'error');
+                alert("Debes activar el GPS para cerrar entregas.");
+                return false;
+            }
+
             const res = await fetch('?action=cerrar_individual', {
-                method: 'POST', body: JSON.stringify({ ...e, csrf_token: CSRF })
+                method: 'POST', body: JSON.stringify({ ...e, csrf_token: CSRF, gps_real: gps })
             });
             const r = await res.json();
             if (r.success) {
                 const badge = document.getElementById(`st-${id}`);
                 if (badge) { badge.className = 'status-badge st-delivered'; badge.textContent = 'CERRADO'; }
-                log(`Éxito en #${id}: Coordenadas registradas en MySQL.`, 'success');
+                log(`Éxito en #${id}: Pedido ${bypass_active ? 'Bypasseado' : 'Validado'} correctamente.`, 'success');
             }
             return r.success;
         }
@@ -426,7 +549,13 @@ function renderizarInterfaz($config, $pagina) {
         if(document.getElementById('formAjustes')) document.getElementById('formAjustes').onsubmit = async (e) => {
             e.preventDefault();
             const fd = new FormData(e.target);
-            const config = { client_id: fd.get('client_id'), client_secret: fd.get('client_secret'), intervalo_cierre: fd.get('intervalo_cierre') };
+            const config = {
+                client_id: fd.get('client_id'),
+                client_secret: fd.get('client_secret'),
+                intervalo_cierre: fd.get('intervalo_cierre'),
+                validar_gps: fd.get('validar_gps') === 'on',
+                radio_maximo: fd.get('radio_maximo')
+            };
             const res = await fetch('?action=api_guardar_ajustes', { method:'POST', body: JSON.stringify({ config, csrf_token: CSRF }) });
             if((await res.json()).success) alert('¡Ajustes guardados con éxito!');
         };

@@ -11,3 +11,57 @@
 [Tue May 26 00:53:05 2026] [::1]:42480 Accepted
 [Tue May 26 00:53:05 2026] [::1]:42480 [200]: GET /mercadopago.php?action=obtener_pedidos
 [Tue May 26 00:53:05 2026] [::1]:42480 Closing
+[Tue May 26 01:05:40 2026] [::1]:35176 Accepted
+[Tue May 26 01:05:40 2026] [::1]:35176 [302]: GET /mercadopago.php?action=demo
+[Tue May 26 01:05:40 2026] [::1]:35176 Closing
+[Tue May 26 01:05:40 2026] [::1]:35188 Accepted
+[Tue May 26 01:05:40 2026] [::1]:35188 [200]: GET /mercadopago.php?action=panel
+[Tue May 26 01:05:40 2026] [::1]:35188 Closing
+[Tue May 26 01:05:40 2026] [::1]:35198 Accepted
+[Tue May 26 01:05:40 2026] [::1]:35198 [200]: GET /mercadopago.php?action=obtener_pedidos
+[Tue May 26 01:05:40 2026] [::1]:35198 Closing
+[Tue May 26 01:05:40 2026] [::1]:35202 Accepted
+[Tue May 26 01:05:40 2026] [::1]:35202 [200]: GET /mercadopago.php?action=ajustes
+[Tue May 26 01:05:40 2026] [::1]:35202 Closing
+[Tue May 26 01:05:41 2026] [::1]:35216 Accepted
+[Tue May 26 01:05:41 2026] [::1]:35216 [200]: GET /mercadopago.php?action=panel
+[Tue May 26 01:05:41 2026] [::1]:35216 Closing
+[Tue May 26 01:05:41 2026] [::1]:35224 Accepted
+[Tue May 26 01:05:41 2026] [::1]:35224 [200]: GET /mercadopago.php?action=obtener_pedidos
+[Tue May 26 01:05:41 2026] [::1]:35224 Closing
+[Tue May 26 01:06:03 2026] [::1]:33476 Accepted
+[Tue May 26 01:06:03 2026] [::1]:33476 [302]: GET /mercadopago.php?action=demo
+[Tue May 26 01:06:03 2026] [::1]:33476 Closing
+[Tue May 26 01:06:03 2026] [::1]:33486 Accepted
+[Tue May 26 01:06:03 2026] [::1]:33486 [200]: GET /mercadopago.php?action=panel
+[Tue May 26 01:06:03 2026] [::1]:33486 Closing
+[Tue May 26 01:06:03 2026] [::1]:33500 Accepted
+[Tue May 26 01:06:03 2026] [::1]:33500 [200]: GET /mercadopago.php?action=obtener_pedidos
+[Tue May 26 01:06:03 2026] [::1]:33500 Closing
+[Tue May 26 01:06:03 2026] [::1]:33516 Accepted
+[Tue May 26 01:06:03 2026] [::1]:33516 [200]: GET /mercadopago.php?action=ajustes
+[Tue May 26 01:06:03 2026] [::1]:33516 Closing
+[Tue May 26 01:06:03 2026] [::1]:33524 Accepted
+[Tue May 26 01:06:03 2026] [::1]:33524 [200]: GET /mercadopago.php?action=panel
+[Tue May 26 01:06:03 2026] [::1]:33524 Closing
+[Tue May 26 01:06:03 2026] [::1]:33534 Accepted
+[Tue May 26 01:06:03 2026] [::1]:33534 [200]: GET /mercadopago.php?action=obtener_pedidos
+[Tue May 26 01:06:03 2026] [::1]:33534 Closing
+[Tue May 26 01:08:20 2026] [::1]:36338 Accepted
+[Tue May 26 01:08:20 2026] [::1]:36338 [302]: GET /mercadopago.php?action=demo
+[Tue May 26 01:08:20 2026] [::1]:36338 Closing
+[Tue May 26 01:08:20 2026] [::1]:36352 Accepted
+[Tue May 26 01:08:20 2026] [::1]:36352 [200]: GET /mercadopago.php?action=panel
+[Tue May 26 01:08:20 2026] [::1]:36352 Closing
+[Tue May 26 01:08:20 2026] [::1]:36360 Accepted
+[Tue May 26 01:08:20 2026] [::1]:36360 [200]: GET /mercadopago.php?action=obtener_pedidos
+[Tue May 26 01:08:20 2026] [::1]:36360 Closing
+[Tue May 26 01:08:21 2026] [::1]:36372 Accepted
+[Tue May 26 01:08:21 2026] [::1]:36372 [200]: GET /mercadopago.php?action=ajustes
+[Tue May 26 01:08:21 2026] [::1]:36372 Closing
+[Tue May 26 01:08:21 2026] [::1]:36388 Accepted
+[Tue May 26 01:08:21 2026] [::1]:36388 [200]: GET /mercadopago.php?action=panel
+[Tue May 26 01:08:21 2026] [::1]:36388 Closing
+[Tue May 26 01:08:21 2026] [::1]:36390 Accepted
+[Tue May 26 01:08:21 2026] [::1]:36390 [200]: GET /mercadopago.php?action=obtener_pedidos
+[Tue May 26 01:08:21 2026] [::1]:36390 Closing
