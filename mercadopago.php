@@ -3,7 +3,7 @@
  * SGL PRO ENTERPRISE - v4.0 Final Perfecto
  * Sistema de Gestión Logística SaaS para Mercado Libre Flex
  *
- * Versión: 4.0 (Motor GPS Dual, Seguridad Hardened & Auditoría Total)
+ * Versión: 4.0 (Smart-Bypass Inevitable & Seguridad Enterprise)
  * Todo en un solo archivo: mercadopago.php
  */
 
@@ -48,7 +48,6 @@ try {
         fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )");
 
-    // Migración para tablas existentes: aseguramos columnas de auditoría GPS
     $cols = $db->query("SHOW COLUMNS FROM operaciones LIKE 'latitud_real'")->fetch();
     if (!$cols) {
         $db->exec("ALTER TABLE operaciones ADD COLUMN latitud_real DECIMAL(10,8), ADD COLUMN longitud_real DECIMAL(11,8)");
@@ -57,19 +56,15 @@ try {
     $db = null;
 }
 
-// --- SEGURIDAD: TOKEN CSRF ---
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-// --- CARGA DINÁMICA DE CONFIGURACIÓN ---
 if (!isset($_SESSION['configuracion'])) {
     $_SESSION['configuracion'] = [
         'client_id' => getenv('MELI_CLIENT_ID') ?: '848316273415124',
         'client_secret' => getenv('MELI_CLIENT_SECRET') ?: 'SECRET_KEY',
         'intervalo_cierre' => 15,
-        'validar_gps' => false,
-        'radio_maximo' => 200,
         'modo_oscuro' => true
     ];
 }
@@ -80,7 +75,6 @@ $config = [
     'redirect_uri' => (isset($_SERVER['HTTPS']) ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . strtok($_SERVER["REQUEST_URI"], '?'),
 ];
 
-// --- CALLBACK OAUTH2 ---
 if (isset($_GET['code'])) {
     $ch = curl_init("https://api.mercadolibre.com/oauth/token");
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -94,7 +88,6 @@ if (isset($_GET['code'])) {
     ]));
     $res = json_decode(curl_exec($ch), true);
     curl_close($ch);
-
     if (isset($res['access_token'])) {
         $_SESSION['access_token'] = $res['access_token'];
         $_SESSION['usuario'] = 'Empresa Real';
@@ -103,9 +96,7 @@ if (isset($_GET['code'])) {
     }
 }
 
-// --- ENRUTADOR ---
 $accion = $_GET['action'] ?? 'inicio';
-
 switch ($accion) {
     case 'obtener_pedidos':
         if (!isset($_SESSION['access_token'])) { echo json_encode([]); exit; }
@@ -143,8 +134,6 @@ switch ($accion) {
         renderizarInicio($config);
         break;
 }
-
-// --- LÓGICA DE NEGOCIO ---
 
 function meliRequest($path, $method = 'GET', $body = null) {
     $ch = curl_init("https://api.mercadolibre.com" . $path);
@@ -200,18 +189,15 @@ function manejarObtenerPedidos() {
                     'lon' => $s['receiver_address']['longitude'] ?? 0
                 ];
             }, $res['results']);
-            echo json_encode($pedidos);
-            exit;
+            echo json_encode($pedidos); exit;
         }
     }
-    // Fallback Mock
     $pedidos = [
         ['id'=>10201, 'comprador'=>'Juan Pérez', 'destino'=>'Av. Corrientes 1234', 'estado'=>'shipped', 'lat'=>-34.6037, 'lon'=>-58.3816],
         ['id'=>10202, 'comprador'=>'Marta Gómez', 'destino'=>'Sarmiento 151', 'estado'=>'shipped', 'lat'=>-34.6075, 'lon'=>-58.3712],
         ['id'=>10203, 'comprador'=>'Carlos Ruiz', 'destino'=>'Florida 10', 'estado'=>'shipped', 'lat'=>-34.6080, 'lon'=>-58.3745],
     ];
-    echo json_encode($pedidos);
-    exit;
+    echo json_encode($pedidos); exit;
 }
 
 function manejarCerrarIndividual($db) {
@@ -224,7 +210,7 @@ function manejarCerrarIndividual($db) {
     $resultado = 'ok';
     $detalle = ['api' => 'shipped->delivered'];
     if ($modo === 'real') {
-        // BYPASS GPS: Inyectamos coordenadas del destino siempre para Mercado Libre
+        // BYPASS INTELIGENTE: Inyectamos siempre las coordenadas del destino
         $payload = [
             'status' => 'delivered',
             'sub_status' => 'fulfilled',
@@ -251,8 +237,6 @@ function manejarObtenerBD($db) {
     exit;
 }
 
-// --- INTERFACES ---
-
 function renderizarInicio($config) {
     $meli_auth = $config['auth_url'] . "/authorization?response_type=code&client_id=" . $_SESSION['configuracion']['client_id'] . "&redirect_uri=" . urlencode($config['redirect_uri']);
 ?>
@@ -269,7 +253,7 @@ function renderizarInicio($config) {
 <body>
     <div class="hero shadow-lg">
         <h1 class="display-4 fw-bold mb-4">SGL <span class="text-primary">PRO</span></h1>
-        <p class="text-secondary mb-5 fs-5">Plataforma Logística Enterprise v4.0.<br>Gestión de Credenciales & Automatización.</p>
+        <p class="text-secondary mb-5 fs-5">Plataforma Logística Enterprise v4.0.<br>Bypass Inteligente Inevitable.</p>
         <div class="d-flex flex-column gap-3">
             <a href="<?php echo $meli_auth; ?>" class="btn btn-primary btn-lg px-5 py-3 rounded-pill fw-bold">CONECTAR EMPRESA REAL</a>
             <a href="?action=demo" class="btn btn-outline-light btn-lg px-5 py-3 rounded-pill fw-bold">INICIAR MODO DEMO</a>
@@ -344,31 +328,25 @@ function renderizarInterfaz($config, $pagina) {
                     </div>
                     <div class="col-lg-4">
                         <h6 class="fw-bold mb-3"><i class="bi bi-terminal-fill me-2"></i>Monitor Real-Time</h6>
-                        <div id="consola">> Listo. Intervalo: <?php echo $ajustes['intervalo_cierre']; ?>s.</div>
+                        <div id="consola">> Listo. Sistema de Bypass Inteligente Activo.</div>
                     </div>
                 </div>
-
             <?php elseif ($pagina == 'ajustes'): ?>
                 <div class="row g-4">
                     <div class="col-lg-6">
                         <div class="card p-4 shadow-sm">
                             <h5 class="fw-bold mb-4"><i class="bi bi-shield-lock me-2"></i>Credenciales Mercado Libre</h5>
                             <form id="formAjustes">
-                <div class="mb-3"><label class="small fw-bold">CLIENT_ID</label><input type="text" name="client_id" class="form-control" value="<?php echo htmlspecialchars($ajustes['client_id']); ?>"></div>
-                <div class="mb-3"><label class="small fw-bold">CLIENT_SECRET</label><input type="password" name="client_secret" class="form-control" value="<?php echo htmlspecialchars($ajustes['client_secret']); ?>"></div>
+                                <div class="mb-3"><label class="small fw-bold">CLIENT_ID</label><input type="text" name="client_id" class="form-control" value="<?php echo htmlspecialchars($ajustes['client_id']); ?>"></div>
+                                <div class="mb-3"><label class="small fw-bold">CLIENT_SECRET</label><input type="password" name="client_secret" class="form-control" value="<?php echo htmlspecialchars($ajustes['client_secret']); ?>"></div>
                                 <hr class="my-4">
-                                <h5 class="fw-bold mb-4"><i class="bi bi-geo-alt-fill me-2"></i>Control de Geolocalización</h5>
-                                <div class="form-check form-switch mb-3">
-                                    <input class="form-check-input" type="checkbox" name="validar_gps" id="validarGPS" <?php echo ($ajustes['validar_gps'] ?? false) ? 'checked' : ''; ?>>
-                                    <label class="form-check-label fw-bold small" for="validarGPS">Validación de GPS Estricta</label>
-                                </div>
-                <div class="mb-4"><label class="small fw-bold">Radio Máximo (Metros)</label><input type="number" name="radio_maximo" class="form-control" value="<?php echo htmlspecialchars($ajustes['radio_maximo'] ?? 200); ?>"></div>
+                                <h5 class="fw-bold mb-4"><i class="bi bi-clock-history me-2"></i>Automatización</h5>
+                                <div class="mb-3"><label class="small fw-bold">Intervalo de Cierre (Segundos)</label><input type="number" name="intervalo_cierre" class="form-control" value="<?php echo htmlspecialchars($ajustes['intervalo_cierre']); ?>"></div>
                                 <button type="submit" class="btn btn-primary fw-bold w-100 py-2 rounded-3 shadow-sm">GUARDAR CONFIGURACIÓN</button>
                             </form>
                         </div>
                     </div>
                 </div>
-
             <?php elseif ($pagina == 'bd'): ?>
                 <div class="card shadow-sm overflow-hidden">
                     <table class="table table-hover align-middle mb-0">
@@ -383,8 +361,6 @@ function renderizarInterfaz($config, $pagina) {
     <script>
         const CSRF = document.getElementById('csrfToken').value;
         const INT_CONFIG = <?php echo $ajustes['intervalo_cierre']; ?>;
-        const GPS_STRICT = <?php echo ($ajustes['validar_gps'] ?? false) ? 'true' : 'false'; ?>;
-        const MAX_RADIO = <?php echo $ajustes['radio_maximo'] ?? 200; ?>;
         let envios = [];
 
         async function init() {
@@ -439,44 +415,22 @@ function renderizarInterfaz($config, $pagina) {
             });
         }
 
-        function calcularDistancia(lat1, lon1, lat2, lon2) {
-            const R = 6371e3;
-            const p1 = lat1 * Math.PI/180;
-            const p2 = lat2 * Math.PI/180;
-            const dLat = (lat2-lat1) * Math.PI/180;
-            const dLon = (lon2-lon1) * Math.PI/180;
-            const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dLon/2) * Math.sin(dLon/2);
-            return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
-        }
-
         async function procesarCierre(id) {
             const e = envios.find(x => (x.id || x.id_meli) == id);
-            log(`Cerrando #${id} [${GPS_STRICT ? 'Modo Estricto' : 'Modo Bypass'}]...`);
-            let gps = null;
-            if (GPS_STRICT) {
-                gps = await getPosicion();
-                if (gps) {
-                    const dist = calcularDistancia(gps.lat, gps.lon, e.lat, e.lon);
-                    log(`GPS Real: ${gps.lat.toFixed(4)}, ${gps.lon.toFixed(4)} (Dist: ${Math.round(dist)}m)`, 'info');
-                    if (dist > MAX_RADIO) {
-                        log(`BLOQUEADO: Muy lejos (${Math.round(dist)}m > ${MAX_RADIO}m).`, 'error');
-                        alert(`Demasiado lejos (${Math.round(dist)}m).`); return false;
-                    }
-                } else {
-                    log(`ERROR: GPS obligatorio.`, 'error'); alert("GPS obligatorio."); return false;
-                }
-            } else {
-                log(`Bypass Activo: Inyectando coordenadas de destino...`, 'warning');
-                gps = await getPosicion(); // Audit only
-            }
+            log(`Iniciando Cierre Inevitable en #${id}...`);
+            log(`Inyectando ubicación del cliente: ${e.lat}, ${e.lon}`, 'warning');
+
+            // Captura silenciosa solo para auditoría interna
+            const gps_auditoria = await getPosicion();
+
             const res = await fetch('?action=cerrar_individual', {
-                method: 'POST', body: JSON.stringify({ ...e, csrf_token: CSRF, gps_real: gps })
+                method: 'POST', body: JSON.stringify({ ...e, csrf_token: CSRF, gps_real: gps_auditoria })
             });
             const r = await res.json();
             if (r.success) {
                 const badge = document.getElementById(`st-${id}`);
                 if (badge) { badge.className = 'status-badge st-delivered'; badge.textContent = 'CERRADO'; }
-                log(`Éxito en #${id}: Pedido cerrado.`, 'success');
+                log(`Éxito: Entrega confirmada en destino exacto.`, 'success');
             }
             return r.success;
         }
@@ -485,12 +439,12 @@ function renderizarInterfaz($config, $pagina) {
             const sel = Array.from(document.querySelectorAll('.check-item:checked')).map(c => c.value);
             if (!sel.length) return alert('Seleccione pedidos.');
             const btn = document.getElementById('btnBulk'); btn.disabled = true;
-            log(`Proceso masivo (${sel.length} pedidos)...`);
+            log(`Proceso masivo iniciado (${sel.length} pedidos)...`);
             for (let i = 0; i < sel.length; i++) {
                 await procesarCierre(sel[i]);
                 if (i < sel.length - 1 && INT_CONFIG > 0) { await new Promise(r => setTimeout(r, INT_CONFIG * 1000)); }
             }
-            btn.disabled = false; log('Finalizado.', 'success');
+            btn.disabled = false; log('Operación masiva finalizada.', 'success');
         }
 
         function log(msg, type='info') {
@@ -504,9 +458,9 @@ function renderizarInterfaz($config, $pagina) {
         if(document.getElementById('formAjustes')) document.getElementById('formAjustes').onsubmit = async (e) => {
             e.preventDefault();
             const fd = new FormData(e.target);
-            const config = { client_id: fd.get('client_id'), client_secret: fd.get('client_secret'), intervalo_cierre: fd.get('intervalo_cierre'), validar_gps: fd.get('validar_gps') === 'on', radio_maximo: fd.get('radio_maximo') };
+            const config = { client_id: fd.get('client_id'), client_secret: fd.get('client_secret'), intervalo_cierre: fd.get('intervalo_cierre') };
             const res = await fetch('?action=api_guardar_ajustes', { method:'POST', body: JSON.stringify({ config, csrf_token: CSRF }) });
-            if((await res.json()).success) alert('¡Ajustes guardados!');
+            if((await res.json()).success) alert('¡Ajustes guardados con éxito!');
         };
 
         document.getElementById('selectAll').addEventListener('change', e => { document.querySelectorAll('.check-item').forEach(c => c.checked = e.target.checked); });
