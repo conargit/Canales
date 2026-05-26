@@ -51,90 +51,96 @@ function getDb() {
         $db = new PDO($dsn, $user, $pass);
         $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-        // 1. Core Tables
-        $db->exec("CREATE TABLE IF NOT EXISTS sucursales (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            nombre VARCHAR(255) NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB");
+        // 1. Core Tables (Aligned with phpMyAdmin Dump)
+        $db->exec("CREATE TABLE IF NOT EXISTS `ajustes` (
+          `clave` varchar(255) NOT NULL,
+          `valor` text,
+          `id_sucursal` int(11) DEFAULT NULL,
+          PRIMARY KEY (`clave`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-        $db->exec("CREATE TABLE IF NOT EXISTS roles (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            nombre VARCHAR(50) NOT NULL
-        ) ENGINE=InnoDB");
+        $db->exec("CREATE TABLE IF NOT EXISTS `campanas` (
+          `id` int(11) NOT NULL AUTO_INCREMENT,
+          `id_instancia` int(11) DEFAULT NULL,
+          `nombre` varchar(255) DEFAULT NULL,
+          `mensaje` text,
+          `destinatarios` text,
+          `estado` varchar(50) NOT NULL DEFAULT 'pendiente',
+          `fecha` datetime DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-        $db->exec("CREATE TABLE IF NOT EXISTS usuarios (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            nombre VARCHAR(255) NOT NULL,
-            email VARCHAR(255) UNIQUE NOT NULL,
-            password VARCHAR(255) NOT NULL,
-            id_rol INT,
-            id_sucursal INT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB");
+        $db->exec("CREATE TABLE IF NOT EXISTS `chats` (
+          `id` int(11) NOT NULL AUTO_INCREMENT,
+          `id_instancia` int(11) DEFAULT NULL,
+          `remitente` varchar(50) DEFAULT NULL,
+          `mensaje` text,
+          `respuesta` text,
+          `modo` varchar(20) NOT NULL DEFAULT 'auto',
+          `id_usuario_asignado` int(11) DEFAULT NULL,
+          `fecha` datetime DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-        $db->exec("CREATE TABLE IF NOT EXISTS ajustes (
-            clave VARCHAR(255) PRIMARY KEY,
-            valor TEXT,
-            id_sucursal INT DEFAULT 0
-        ) ENGINE=InnoDB");
+        $db->exec("CREATE TABLE IF NOT EXISTS `instancias_wa` (
+          `id` int(11) NOT NULL AUTO_INCREMENT,
+          `id_sucursal` int(11) DEFAULT NULL,
+          `nombre_identificador` varchar(255) DEFAULT NULL,
+          `instance_name` varchar(255) DEFAULT NULL,
+          `gateway_url` varchar(255) DEFAULT NULL,
+          `api_key` varchar(255) DEFAULT NULL,
+          `webhook_token` varchar(255) DEFAULT NULL,
+          `estado` varchar(50) NOT NULL DEFAULT 'desconectado',
+          `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-        $db->exec("CREATE TABLE IF NOT EXISTS instancias_wa (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            id_sucursal INT,
-            nombre_identificador VARCHAR(255),
-            instance_name VARCHAR(255),
-            gateway_url VARCHAR(255),
-            api_key VARCHAR(255),
-            webhook_token VARCHAR(255),
-            estado VARCHAR(50) DEFAULT 'desconectado'
-        ) ENGINE=InnoDB");
+        $db->exec("CREATE TABLE IF NOT EXISTS `memoria` (
+          `id` int(11) NOT NULL AUTO_INCREMENT,
+          `id_sucursal` int(11) DEFAULT NULL,
+          `tipo` varchar(50) DEFAULT NULL,
+          `fuente` varchar(255) DEFAULT NULL,
+          `contenido` longtext,
+          `fecha` datetime DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-        $db->exec("CREATE TABLE IF NOT EXISTS memoria (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            id_sucursal INT DEFAULT 1,
-            tipo VARCHAR(50),
-            fuente VARCHAR(255),
-            contenido LONGTEXT,
-            fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB");
+        $db->exec("CREATE TABLE IF NOT EXISTS `roles` (
+          `id` int(11) NOT NULL AUTO_INCREMENT,
+          `nombre` varchar(50) NOT NULL,
+          PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-        $db->exec("CREATE TABLE IF NOT EXISTS chats (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            id_instancia INT DEFAULT 1,
-            remitente VARCHAR(50),
-            mensaje TEXT,
-            respuesta TEXT,
-            modo VARCHAR(20) DEFAULT 'auto',
-            id_usuario_asignado INT DEFAULT 0,
-            fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB");
+        $db->exec("CREATE TABLE IF NOT EXISTS `sucursales` (
+          `id` int(11) NOT NULL AUTO_INCREMENT,
+          `nombre` varchar(255) NOT NULL,
+          `activo` tinyint(1) NOT NULL DEFAULT '1',
+          `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-        $db->exec("CREATE TABLE IF NOT EXISTS campanas (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            id_instancia INT DEFAULT 1,
-            nombre VARCHAR(255),
-            mensaje TEXT,
-            destinatarios TEXT,
-            estado VARCHAR(50) DEFAULT 'pendiente',
-            fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB");
+        $db->exec("CREATE TABLE IF NOT EXISTS `usuarios` (
+          `id` int(11) NOT NULL AUTO_INCREMENT,
+          `nombre` varchar(255) NOT NULL,
+          `password` varchar(255) NOT NULL,
+          `id_rol` int(11) DEFAULT NULL,
+          `id_sucursal` int(11) DEFAULT NULL,
+          `activo` tinyint(1) NOT NULL DEFAULT '1',
+          `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `nombre` (`nombre`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-        // 2. Initial Seeding
-        $rolesCount = $db->query("SELECT COUNT(*) FROM roles")->fetchColumn();
-        if ($rolesCount == 0) {
-            $db->exec("INSERT INTO roles (nombre) VALUES ('Admin'), ('Operador')");
+        // 2. Initial Seeding (Aligned with Dump)
+        if ($db->query("SELECT COUNT(*) FROM roles")->fetchColumn() == 0) {
+            $db->exec("INSERT INTO roles (id, nombre) VALUES (1, 'Admin'), (2, 'Operador')");
         }
-
-        $sucursalCount = $db->query("SELECT COUNT(*) FROM sucursales")->fetchColumn();
-        if ($sucursalCount == 0) {
-            $db->exec("INSERT INTO sucursales (nombre) VALUES ('Empresa Principal')");
+        if ($db->query("SELECT COUNT(*) FROM sucursales")->fetchColumn() == 0) {
+            $db->exec("INSERT INTO sucursales (id, nombre) VALUES (1, 'Empresa Principal')");
         }
-
-        $userCount = $db->query("SELECT COUNT(*) FROM usuarios")->fetchColumn();
-        if ($userCount == 0) {
+        if ($db->query("SELECT COUNT(*) FROM usuarios")->fetchColumn() == 0) {
             $pass = password_hash('admin123', PASSWORD_DEFAULT);
-            $db->exec("INSERT INTO usuarios (nombre, email, password, id_rol, id_sucursal) VALUES ('Administrador', 'admin@admin.com', '$pass', 1, 1)");
+            $db->exec("INSERT INTO usuarios (nombre, password, id_rol, id_sucursal) VALUES ('admin', '$pass', 1, 1)");
         }
 
         // Seed global webhook token if not exists
@@ -333,23 +339,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     // Login Action
     if ($action === 'login') {
-        $email = $_POST['email'] ?? '';
+        $nombre = $_POST['nombre'] ?? '';
         $pass = $_POST['password'] ?? '';
-        $stmt = $pdo->prepare("SELECT * FROM usuarios WHERE email = ?");
-        $stmt->execute([$email]);
+        $stmt = $pdo->prepare("SELECT * FROM usuarios WHERE nombre = ? AND activo = 1");
+        $stmt->execute([$nombre]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if ($user && password_verify($pass, $user['password'])) {
+        // Check password (supports both plain text for the user's initial data and hashed)
+        if ($user && ($pass === $user['password'] || password_verify($pass, $user['password']))) {
             $_SESSION['user_id'] = $user['id'];
             $_SESSION['user_name'] = $user['nombre'];
             $_SESSION['user_role'] = $user['id_rol'];
             $_SESSION['user_sucursal'] = $user['id_sucursal'];
+            $_SESSION['mode'] = 'real';
             header("Location: ?view=dashboard");
             exit;
         } else {
-            $message = "Credenciales incorrectas.";
+            $message = "Credenciales incorrectas o usuario inactivo.";
             $view = 'login';
         }
+    }
+
+    if ($action === 'login_demo') {
+        $_SESSION['user_id'] = 999;
+        $_SESSION['user_name'] = 'Usuario Demo';
+        $_SESSION['user_role'] = 1; // Admin for demo
+        $_SESSION['user_sucursal'] = 1;
+        $_SESSION['mode'] = 'demo';
+        header("Location: ?view=dashboard");
+        exit;
     }
 
     if ($action === 'logout') {
@@ -378,10 +396,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     // User Management
-    if ($action === 'add_user' && !empty($_POST['email'])) {
+    if ($action === 'add_user' && !empty($_POST['nombre'])) {
         $pass = password_hash($_POST['password'], PASSWORD_DEFAULT);
-        $stmt = $pdo->prepare("INSERT INTO usuarios (nombre, email, password, id_rol, id_sucursal) VALUES (?, ?, ?, ?, ?)");
-        $stmt->execute([$_POST['nombre'], $_POST['email'], $pass, $_POST['id_rol'], $_SESSION['user_sucursal']]);
+        $stmt = $pdo->prepare("INSERT INTO usuarios (nombre, password, id_rol, id_sucursal, activo) VALUES (?, ?, ?, ?, 1)");
+        $stmt->execute([$_POST['nombre'], $pass, $_POST['id_rol'], $_SESSION['user_sucursal']]);
         $message = "Usuario agregado.";
     }
 
@@ -638,19 +656,26 @@ check_auth();
                     <p class="text-muted">Ingresa a tu plataforma</p>
                 </div>
                 <?php if ($message): ?> <div class="alert alert-danger py-2 small"><?php echo $message; ?></div> <?php endif; ?>
-                <form method="POST">
+                <form method="POST" class="mb-3">
                     <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                     <input type="hidden" name="action" value="login">
                     <div class="mb-3">
-                        <label class="form-label">Email</label>
-                        <input type="email" name="email" class="form-control" required placeholder="admin@admin.com">
+                        <label class="form-label">Usuario</label>
+                        <input type="text" name="nombre" class="form-control" required placeholder="admin">
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Contraseña</label>
                         <input type="password" name="password" class="form-control" required placeholder="admin123">
                     </div>
-                    <button type="submit" class="btn btn-success w-100 py-2 fw-bold">Entrar</button>
+                    <button type="submit" class="btn btn-success w-100 py-2 fw-bold">Conectar Empresa Real</button>
                 </form>
+                <div class="text-center">
+                    <hr>
+                    <form method="POST">
+                        <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                        <button type="submit" name="action" value="login_demo" class="btn btn-outline-primary w-100 py-2 fw-bold">Iniciar Modo Demo</button>
+                    </form>
+                </div>
             </div>
         </div>
         <?php
@@ -869,8 +894,7 @@ check_auth();
                     <form method="POST">
                         <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                         <input type="hidden" name="action" value="add_user">
-                        <div class="mb-3"><label class="form-label">Nombre</label><input type="text" name="nombre" class="form-control" required></div>
-                        <div class="mb-3"><label class="form-label">Email</label><input type="email" name="email" class="form-control" required></div>
+                        <div class="mb-3"><label class="form-label">Nombre de Usuario</label><input type="text" name="nombre" class="form-control" required></div>
                         <div class="mb-3"><label class="form-label">Contraseña</label><input type="password" name="password" class="form-control" required></div>
                         <div class="mb-3">
                             <label class="form-label">Rol</label>
@@ -888,12 +912,12 @@ check_auth();
                 <div class="card p-4">
                     <h5 class="fw-bold mb-4">Usuarios de la Empresa</h5>
                     <table class="table">
-                        <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Acción</th></tr></thead>
+                        <thead><tr><th>Nombre</th><th>Estado</th><th>Rol</th><th>Acción</th></tr></thead>
                         <tbody>
                             <?php foreach ($users as $u): ?>
                             <tr>
                                 <td><?php echo htmlspecialchars($u['nombre']); ?></td>
-                                <td><?php echo htmlspecialchars($u['email']); ?></td>
+                                <td><span class="badge <?php echo $u['activo'] ? 'bg-success' : 'bg-danger'; ?>"><?php echo $u['activo'] ? 'Activo' : 'Inactivo'; ?></span></td>
                                 <td><span class="badge bg-info"><?php echo $u['rol_nombre']; ?></span></td>
                                 <td>
                                     <?php if ($u['id'] != $_SESSION['user_id']): ?>
@@ -916,83 +940,100 @@ check_auth();
 
     function include_sql_schema() {
         $sql = "
-CREATE DATABASE IF NOT EXISTS whatsapp;
-USE whatsapp;
+-- phpMyAdmin SQL Dump
+-- Estructura de tabla para la tabla `ajustes`
+CREATE TABLE `ajustes` (
+  `clave` varchar(255) NOT NULL,
+  `valor` text,
+  `id_sucursal` int(11) DEFAULT NULL,
+  PRIMARY KEY (`clave`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE sucursales (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    nombre VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
+-- Estructura de tabla para la tabla `campanas`
+CREATE TABLE `campanas` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `id_instancia` int(11) DEFAULT NULL,
+  `nombre` varchar(255) DEFAULT NULL,
+  `mensaje` text,
+  `destinatarios` text,
+  `estado` varchar(50) NOT NULL DEFAULT 'pendiente',
+  `fecha` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE roles (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    nombre VARCHAR(50) NOT NULL
-) ENGINE=InnoDB;
+-- Estructura de tabla para la tabla `chats`
+CREATE TABLE `chats` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `id_instancia` int(11) DEFAULT NULL,
+  `remitente` varchar(50) DEFAULT NULL,
+  `mensaje` text,
+  `respuesta` text,
+  `modo` varchar(20) NOT NULL DEFAULT 'auto',
+  `id_usuario_asignado` int(11) DEFAULT NULL,
+  `fecha` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE usuarios (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    nombre VARCHAR(255) NOT NULL,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL,
-    id_rol INT,
-    id_sucursal INT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
+-- Estructura de tabla para la tabla `instancias_wa`
+CREATE TABLE `instancias_wa` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `id_sucursal` int(11) DEFAULT NULL,
+  `nombre_identificador` varchar(255) DEFAULT NULL,
+  `instance_name` varchar(255) DEFAULT NULL,
+  `gateway_url` varchar(255) DEFAULT NULL,
+  `api_key` varchar(255) DEFAULT NULL,
+  `webhook_token` varchar(255) DEFAULT NULL,
+  `estado` varchar(50) NOT NULL DEFAULT 'desconectado',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE ajustes (
-    clave VARCHAR(255) PRIMARY KEY,
-    valor TEXT,
-    id_sucursal INT DEFAULT 0
-) ENGINE=InnoDB;
+-- Estructura de tabla para la tabla `memoria`
+CREATE TABLE `memoria` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `id_sucursal` int(11) DEFAULT NULL,
+  `tipo` varchar(50) DEFAULT NULL,
+  `fuente` varchar(255) DEFAULT NULL,
+  `contenido` longtext,
+  `fecha` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE instancias_wa (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    id_sucursal INT,
-    nombre_identificador VARCHAR(255),
-    instance_name VARCHAR(255),
-    gateway_url VARCHAR(255),
-    api_key VARCHAR(255),
-    webhook_token VARCHAR(255),
-    estado VARCHAR(50) DEFAULT 'desconectado'
-) ENGINE=InnoDB;
+-- Estructura de tabla para la tabla `roles`
+CREATE TABLE `roles` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `nombre` varchar(50) NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE memoria (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    id_sucursal INT DEFAULT 1,
-    tipo VARCHAR(50),
-    fuente VARCHAR(255),
-    contenido LONGTEXT,
-    fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
+-- Estructura de tabla para la tabla `sucursales`
+CREATE TABLE `sucursales` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `nombre` varchar(255) NOT NULL,
+  `activo` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE chats (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    id_instancia INT DEFAULT 1,
-    remitente VARCHAR(50),
-    mensaje TEXT,
-    respuesta TEXT,
-    modo VARCHAR(20) DEFAULT 'auto',
-    id_usuario_asignado INT DEFAULT 0,
-    fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
-
-CREATE TABLE campanas (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    id_instancia INT DEFAULT 1,
-    nombre VARCHAR(255),
-    mensaje TEXT,
-    destinatarios TEXT,
-    estado VARCHAR(50) DEFAULT 'pendiente',
-    fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
+-- Estructura de tabla para la tabla `usuarios`
+CREATE TABLE `usuarios` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `nombre` varchar(255) NOT NULL,
+  `password` varchar(255) NOT NULL,
+  `id_rol` int(11) DEFAULT NULL,
+  `id_sucursal` int(11) DEFAULT NULL,
+  `activo` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `nombre` (`nombre`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Datos Iniciales
 INSERT INTO roles (id, nombre) VALUES (1, 'Admin'), (2, 'Operador');
 INSERT INTO sucursales (id, nombre) VALUES (1, 'Empresa Principal');
 -- Contraseña por defecto: admin123
-INSERT INTO usuarios (nombre, email, password, id_rol, id_sucursal)
-VALUES ('Administrador', 'admin@admin.com', '" . password_hash('admin123', PASSWORD_DEFAULT) . "', 1, 1);
+INSERT INTO usuarios (nombre, password, id_rol, id_sucursal)
+VALUES ('admin', '" . password_hash('admin123', PASSWORD_DEFAULT) . "', 1, 1);
         ";
         ?>
         <div class="card p-4">
