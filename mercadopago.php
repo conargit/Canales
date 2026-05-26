@@ -10,10 +10,10 @@
 session_start();
 
 // --- CONFIGURACIÓN DE BASE DE DATOS (MySQL) ---
-$db_host = 'localhost';
-$db_user = 'qualityexpress';
-$db_pass = 'jplr1982';
-$db_name = 'qualityexpress';
+$db_host = getenv('DB_HOST') ?: 'localhost';
+$db_user = getenv('DB_USER') ?: 'qualityexpress';
+$db_pass = getenv('DB_PASS') ?: 'jplr1982';
+$db_name = getenv('DB_NAME') ?: 'qualityexpress';
 
 try {
     $db = new PDO(
@@ -47,6 +47,13 @@ try {
         fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )");
+
+    // Migración para tablas existentes: aseguramos columnas de auditoría GPS
+    $cols = $db->query("SHOW COLUMNS FROM operaciones LIKE 'latitud_real'")->fetch();
+    if (!$cols) {
+        $db->exec("ALTER TABLE operaciones ADD COLUMN latitud_real DECIMAL(10,8), ADD COLUMN longitud_real DECIMAL(11,8)");
+    }
+
 } catch (Exception $e) {
     $db = null;
 }
@@ -220,13 +227,15 @@ function manejarCerrarIndividual($db) {
     $resultado = 'ok';
     $detalle = ['api' => 'shipped->delivered'];
 
-    if ($modo === 'real') {
+    if ($modo === 'real' && !empty($_SESSION['access_token'])) {
         // BYPASS GPS: Inyectamos coordenadas del destino en la llamada API
+        // Mercado Libre Flex requiere status 'delivered' y opcionalmente sub_status
         $payload = [
             'status' => 'delivered',
+            'sub_status' => 'fulfilled',
             'location' => [
-                'latitude' => $d['lat'],
-                'longitude' => $d['lon']
+                'latitude' => (float)$d['lat'],
+                'longitude' => (float)$d['lon']
             ]
         ];
         $res = meliRequest("/shipments/{$d['id']}", 'PUT', $payload);
@@ -358,11 +367,11 @@ function renderizarInterfaz($config, $pagina) {
                         <div class="card p-4 shadow-sm">
                             <h5 class="fw-bold mb-4"><i class="bi bi-shield-lock me-2"></i>Credenciales Mercado Libre</h5>
                             <form id="formAjustes">
-                                <div class="mb-3"><label class="small fw-bold">CLIENT_ID (App ID)</label><input type="text" name="client_id" class="form-control" value="<?php echo $ajustes['client_id']; ?>"></div>
-                                <div class="mb-3"><label class="small fw-bold">CLIENT_SECRET (Secret Key)</label><input type="password" name="client_secret" class="form-control" value="<?php echo $ajustes['client_secret']; ?>"></div>
+                <div class="mb-3"><label class="small fw-bold">CLIENT_ID (App ID)</label><input type="text" name="client_id" class="form-control" value="<?php echo htmlspecialchars($ajustes['client_id']); ?>"></div>
+                <div class="mb-3"><label class="small fw-bold">CLIENT_SECRET (Secret Key)</label><input type="password" name="client_secret" class="form-control" value="<?php echo htmlspecialchars($ajustes['client_secret']); ?>"></div>
                                 <hr class="my-4">
                                 <h5 class="fw-bold mb-4"><i class="bi bi-clock-history me-2"></i>Tiempos de Operación</h5>
-                                <div class="mb-3"><label class="small fw-bold">Intervalo de Cierre Masivo (Segundos)</label><input type="number" name="intervalo_cierre" class="form-control" value="<?php echo $ajustes['intervalo_cierre']; ?>"><div class="form-text">Tiempo de espera entre el cierre de cada pedido.</div></div>
+                <div class="mb-3"><label class="small fw-bold">Intervalo de Cierre Masivo (Segundos)</label><input type="number" name="intervalo_cierre" class="form-control" value="<?php echo htmlspecialchars($ajustes['intervalo_cierre']); ?>"><div class="form-text">Tiempo de espera entre el cierre de cada pedido.</div></div>
                                 <hr class="my-4">
                                 <h5 class="fw-bold mb-4"><i class="bi bi-geo-alt-fill me-2"></i>Control de Geolocalización</h5>
                                 <div class="form-check form-switch mb-3">
@@ -370,7 +379,7 @@ function renderizarInterfaz($config, $pagina) {
                                     <label class="form-check-label fw-bold small" for="validarGPS">Validación de GPS Estricta</label>
                                     <div class="form-text small">Si se activa, el repartidor DEBE estar cerca del destino para cerrar.</div>
                                 </div>
-                                <div class="mb-4"><label class="small fw-bold">Radio Máximo Permitido (Metros)</label><input type="number" name="radio_maximo" class="form-control" value="<?php echo $ajustes['radio_maximo'] ?? 200; ?>"></div>
+                <div class="mb-4"><label class="small fw-bold">Radio Máximo Permitido (Metros)</label><input type="number" name="radio_maximo" class="form-control" value="<?php echo htmlspecialchars($ajustes['radio_maximo'] ?? 200); ?>"></div>
                                 <button type="submit" class="btn btn-primary fw-bold w-100 py-2 rounded-3 shadow-sm">GUARDAR CONFIGURACIÓN</button>
                             </form>
                         </div>
@@ -481,11 +490,16 @@ function renderizarInterfaz($config, $pagina) {
         }
 
         function calcularDistancia(lat1, lon1, lat2, lon2) {
-            const R = 6371e3;
-            const φ1 = lat1 * Math.PI/180, φ2 = lat2 * Math.PI/180;
-            const Δφ = (lat2-lat1) * Math.PI/180, Δλ = (lon2-lon1) * Math.PI/180;
-            const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
-            return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+            const R = 6371e3; // Radio de la Tierra en metros
+            const p1 = lat1 * Math.PI/180;
+            const p2 = lat2 * Math.PI/180;
+            const dLat = (lat2-lat1) * Math.PI/180;
+            const dLon = (lon2-lon1) * Math.PI/180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(p1) * Math.cos(p2) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
         }
 
         async function procesarCierre(id) {
