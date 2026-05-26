@@ -2,15 +2,32 @@
 /**
  * AURA BUENOS AIRES - Hotel del Futuro
  * Diseño Ultra-Futurístico y Poderoso
- * Versión: 1.0 - Single File Edition
+ * Versión: 1.1 - Secure Edition
  */
+
+session_start();
+
+// Generar token CSRF si no existe
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 
 // Lógica de simulación de reserva
 $reserva_confirmada = false;
 $nombre = "";
+$fecha = "";
+$capsula = "";
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reservar'])) {
+    // Validar token CSRF
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        die('Error de validación de seguridad (CSRF).');
+    }
+
     $reserva_confirmada = true;
     $nombre = htmlspecialchars($_POST['nombre'] ?? '');
+    $fecha = htmlspecialchars($_POST['fecha'] ?? '');
+    $capsula = htmlspecialchars($_POST['capsula'] ?? '');
 }
 ?>
 <!DOCTYPE html>
@@ -98,6 +115,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reservar'])) {
             justify-content: center;
             position: relative;
             text-align: center;
+            background: linear-gradient(rgba(5, 5, 5, 0.7), rgba(5, 5, 5, 0.7)), url('https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&q=80&w=1920');
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
         }
 
         .hero-content h1 {
@@ -197,9 +218,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reservar'])) {
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
                     <li class="nav-item"><a class="nav-link" href="#booking">RESERVAR</a></li>
-                    <li class="nav-item"><a class="nav-link" href="#suites">EXPERIENCIAS</a></li>
-                    <li class="nav-item"><a class="nav-link" href="#">EL HOTEL</a></li>
-                    <li class="nav-item"><a class="nav-link" href="#">CONTACTO</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#suites">SUITES</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#servicios">SERVICIOS</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#booking">CONTACTO</a></li>
                 </ul>
             </div>
         </div>
@@ -226,7 +247,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reservar'])) {
             <div class="row g-4">
                 <div class="col-md-4">
                     <div class="glass-card">
-                        <img src="https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&q=80&w=800" alt="Suite" class="room-img">
+                        <img src="https://images.unsplash.com/photo-1631679706909-1844bbd07221?auto=format&fit=crop&q=80&w=800" alt="Suite" class="room-img">
                         <h3>NEON LOFT</h3>
                         <p class="opacity-50">Vista panorámica a la Puerto Madero del futuro con cristales de opacidad inteligente.</p>
                         <div class="d-flex justify-content-between align-items-center mt-4">
@@ -237,7 +258,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reservar'])) {
                 </div>
                 <div class="col-md-4">
                     <div class="glass-card">
-                        <img src="https://images.unsplash.com/photo-1590381105924-c72589b9ef3f?auto=format&fit=crop&q=80&w=800" alt="Suite" class="room-img">
+                        <img src="https://images.unsplash.com/photo-1574362848149-11496d93a7c7?auto=format&fit=crop&q=80&w=800" alt="Suite" class="room-img">
                         <h3>CYBER SUITE</h3>
                         <p class="opacity-50">Inmersión sensorial completa y asistentes holográficos personales 24/7.</p>
                         <div class="d-flex justify-content-between align-items-center mt-4">
@@ -248,12 +269,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reservar'])) {
                 </div>
                 <div class="col-md-4">
                     <div class="glass-card">
-                        <img src="https://images.unsplash.com/photo-1596394516093-501ba68a0ba6?auto=format&fit=crop&q=80&w=800" alt="Suite" class="room-img">
+                        <img src="https://images.unsplash.com/photo-1615529328331-f8917597711f?auto=format&fit=crop&q=80&w=800" alt="Suite" class="room-img">
                         <h3>AURA ZENITH</h3>
                         <p class="opacity-50">El pináculo del lujo. Gravedad cero opcional y bio-hacking de descanso.</p>
                         <div class="d-flex justify-content-between align-items-center mt-4">
                             <span class="text-white fw-bold">Ξ 12.0 / Noche</span>
                             <i class="fa-solid fa-arrow-right-long text-info"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Services Section -->
+    <section id="servicios">
+        <div class="container">
+            <h2 class="section-title">SERVICIOS DE ÉLITE</h2>
+            <div class="row g-5">
+                <div class="col-lg-6">
+                    <div class="glass-card p-0 overflow-hidden">
+                        <img src="https://images.unsplash.com/photo-1540555700478-4be289fbecee?auto=format&fit=crop&q=80&w=1200" class="img-fluid" alt="Quantum Spa">
+                        <div class="p-4">
+                            <h3>QUANTUM SPA</h3>
+                            <p>Regeneración celular acelerada y relajación profunda en cámaras de aislamiento sensorial.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-6">
+                    <div class="glass-card p-0 overflow-hidden">
+                        <img src="https://images.unsplash.com/photo-1550966841-39f4f866b334?auto=format&fit=crop&q=80&w=1200" class="img-fluid" alt="Gastronomía">
+                        <div class="p-4">
+                            <h3>GASTRONOMÍA MOLECULAR</h3>
+                            <p>Sabores del mañana diseñados por IA y ejecutados por chefs galardonados.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-12">
+                    <div class="glass-card p-0 overflow-hidden">
+                        <img src="https://images.unsplash.com/photo-1614850523296-d8c1af93d400?auto=format&fit=crop&q=80&w=1600" class="img-fluid" style="height: 400px; width:100%; object-fit: cover;" alt="VR Lounge">
+                        <div class="p-4">
+                            <h3>VR LOUNGE & METAVERSO</h3>
+                            <p>Conexión directa a los nodos más exclusivos del metaverso global desde la comodidad de AURA.</p>
                         </div>
                     </div>
                 </div>
@@ -291,21 +348,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reservar'])) {
                                 <i class="fa-solid fa-circle-check fa-5x text-info mb-4"></i>
                                 <h2 class="text-white">RESERVA EXITOSA</h2>
                                 <p>Bienvenido al futuro, <?php echo $nombre; ?>.</p>
+                                <p class="small opacity-50">Cápsula: <?php echo $capsula; ?> | Fecha: <?php echo $fecha; ?></p>
                                 <a href="index.php" class="btn btn-outline-info mt-3">Volver</a>
                             </div>
                         <?php else: ?>
                             <form method="POST">
+                                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                                 <div class="mb-4">
                                     <label class="form-label text-info">IDENTIDAD</label>
                                     <input type="text" name="nombre" class="form-control" placeholder="Nombre completo" required>
                                 </div>
                                 <div class="mb-4">
                                     <label class="form-label text-info">CRONO-DESTINO</label>
-                                    <input type="date" class="form-control" required>
+                                    <input type="date" name="fecha" class="form-control" required>
                                 </div>
                                 <div class="mb-4">
                                     <label class="form-label text-info">CÁPSULA SELECCIONADA</label>
-                                    <select class="form-control">
+                                    <select name="capsula" class="form-control">
                                         <option>Neon Loft</option>
                                         <option>Cyber Suite</option>
                                         <option>Aura Zenith</option>
@@ -346,7 +405,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reservar'])) {
         // Animación de scroll para las tarjetas
         gsap.registerPlugin(ScrollTrigger);
 
-        gsap.from(".glass-card", {
+        gsap.from("#suites .glass-card", {
             scrollTrigger: {
                 trigger: "#suites",
                 start: "top 80%",
@@ -355,6 +414,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reservar'])) {
             y: 50,
             duration: 1,
             stagger: 0.3
+        });
+
+        gsap.from("#servicios .glass-card", {
+            scrollTrigger: {
+                trigger: "#servicios",
+                start: "top 80%",
+            },
+            opacity: 0,
+            scale: 0.9,
+            duration: 1.2,
+            stagger: 0.2
         });
 
         gsap.from(".section-title", {
