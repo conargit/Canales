@@ -39,80 +39,86 @@ function check_csrf() {
     }
 }
 
-// --- DATABASE SETUP (SQLite) ---
+// --- DATABASE SETUP (MySQL) ---
 function getDb() {
+    $host = getenv('DB_HOST') ?: 'localhost';
+    $dbname = getenv('DB_NAME') ?: 'whatsapp';
+    $user = getenv('DB_USER') ?: 'root';
+    $pass = getenv('DB_PASS') ?: '';
+
     try {
-        $db = new PDO("sqlite:whatsapp.db");
+        $dsn = "mysql:host=$host;dbname=$dbname;charset=utf8mb4";
+        $db = new PDO($dsn, $user, $pass);
         $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
         // 1. Core Tables
         $db->exec("CREATE TABLE IF NOT EXISTS sucursales (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT NOT NULL,
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nombre VARCHAR(255) NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )");
+        ) ENGINE=InnoDB");
 
         $db->exec("CREATE TABLE IF NOT EXISTS roles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT NOT NULL
-        )");
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nombre VARCHAR(50) NOT NULL
+        ) ENGINE=InnoDB");
 
         $db->exec("CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            id_rol INTEGER,
-            id_sucursal INTEGER,
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nombre VARCHAR(255) NOT NULL,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            password VARCHAR(255) NOT NULL,
+            id_rol INT,
+            id_sucursal INT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )");
+        ) ENGINE=InnoDB");
 
         $db->exec("CREATE TABLE IF NOT EXISTS ajustes (
-            clave TEXT PRIMARY KEY,
+            clave VARCHAR(255) PRIMARY KEY,
             valor TEXT,
-            id_sucursal INTEGER DEFAULT 0
-        )");
+            id_sucursal INT DEFAULT 0
+        ) ENGINE=InnoDB");
 
         $db->exec("CREATE TABLE IF NOT EXISTS instancias_wa (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_sucursal INTEGER,
-            nombre_identificador TEXT,
-            instance_name TEXT,
-            gateway_url TEXT,
-            api_key TEXT,
-            webhook_token TEXT,
-            estado TEXT DEFAULT 'desconectado'
-        )");
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            id_sucursal INT,
+            nombre_identificador VARCHAR(255),
+            instance_name VARCHAR(255),
+            gateway_url VARCHAR(255),
+            api_key VARCHAR(255),
+            webhook_token VARCHAR(255),
+            estado VARCHAR(50) DEFAULT 'desconectado'
+        ) ENGINE=InnoDB");
 
         $db->exec("CREATE TABLE IF NOT EXISTS memoria (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_sucursal INTEGER DEFAULT 1,
-            tipo TEXT,
-            fuente TEXT,
-            contenido TEXT,
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            id_sucursal INT DEFAULT 1,
+            tipo VARCHAR(50),
+            fuente VARCHAR(255),
+            contenido LONGTEXT,
             fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-        )");
+        ) ENGINE=InnoDB");
 
         $db->exec("CREATE TABLE IF NOT EXISTS chats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_instancia INTEGER DEFAULT 1,
-            remitente TEXT,
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            id_instancia INT DEFAULT 1,
+            remitente VARCHAR(50),
             mensaje TEXT,
             respuesta TEXT,
-            modo TEXT DEFAULT 'auto',
-            id_usuario_asignado INTEGER DEFAULT 0,
+            modo VARCHAR(20) DEFAULT 'auto',
+            id_usuario_asignado INT DEFAULT 0,
             fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-        )");
+        ) ENGINE=InnoDB");
 
         $db->exec("CREATE TABLE IF NOT EXISTS campanas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_instancia INTEGER DEFAULT 1,
-            nombre TEXT,
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            id_instancia INT DEFAULT 1,
+            nombre VARCHAR(255),
             mensaje TEXT,
             destinatarios TEXT,
-            estado TEXT DEFAULT 'pendiente',
+            estado VARCHAR(50) DEFAULT 'pendiente',
             fecha DATETIME DEFAULT CURRENT_TIMESTAMP
-        )");
+        ) ENGINE=InnoDB");
 
         // 2. Initial Seeding
         $rolesCount = $db->query("SELECT COUNT(*) FROM roles")->fetchColumn();
@@ -176,7 +182,7 @@ function set_setting($clave, $valor, $id_sucursal = null) {
     }
     $id_sucursal = $id_sucursal ?? 0;
 
-    $stmt = $pdo->prepare("INSERT INTO ajustes (clave, valor, id_sucursal) VALUES (?, ?, ?) ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor");
+    $stmt = $pdo->prepare("INSERT INTO ajustes (clave, valor, id_sucursal) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE valor = VALUES(valor)");
     $stmt->execute([$clave, $valor, $id_sucursal]);
 }
 
@@ -434,8 +440,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     if ($action === 'delete_campana' && isset($_POST['id'])) {
-        // SQLite doesn't support JOIN in DELETE directly easily without subqueries
-        $pdo->prepare("DELETE FROM campanas WHERE id = ? AND id_instancia IN (SELECT id FROM instancias_wa WHERE id_sucursal = ?)")->execute([$_POST['id'], $_SESSION['user_sucursal']]);
+        $pdo->prepare("DELETE c FROM campanas c JOIN instancias_wa i ON c.id_instancia = i.id WHERE c.id = ? AND i.id_sucursal = ?")->execute([$_POST['id'], $_SESSION['user_sucursal']]);
         $message = "Campaña eliminada.";
     }
 
@@ -527,6 +532,7 @@ function get_page_title($view) {
         case 'settings': return 'Ajustes';
         case 'users': return 'Gestión de Usuarios';
         case 'instances': return 'Instancias WhatsApp';
+        case 'sql_schema': return 'Script SQL de Base de Datos';
         case 'login': return 'Iniciar Sesión';
         default: return 'WhatsApp AI';
     }
@@ -570,6 +576,7 @@ check_auth();
             <a class="nav-link <?php echo $view == 'campanas' ? 'active' : ''; ?>" href="?view=campanas"><i class="fas fa-bullhorn"></i> Campañas</a>
             <?php if ($_SESSION['user_role'] == 1): ?>
             <a class="nav-link <?php echo $view == 'users' ? 'active' : ''; ?>" href="?view=users"><i class="fas fa-users-cog"></i> Usuarios</a>
+            <a class="nav-link <?php echo $view == 'sql_schema' ? 'active' : ''; ?>" href="?view=sql_schema"><i class="fas fa-database"></i> Script SQL</a>
             <a class="nav-link <?php echo $view == 'settings' ? 'active' : ''; ?>" href="?view=settings"><i class="fas fa-cog"></i> Ajustes</a>
             <?php endif; ?>
         </nav>
@@ -611,6 +618,7 @@ check_auth();
             case 'campanas': include_campanas(); break;
             case 'instances': include_instances(); break;
             case 'users': if ($isAdmin) include_users(); else include_dashboard(); break;
+            case 'sql_schema': if ($isAdmin) include_sql_schema(); else include_dashboard(); break;
             case 'settings': if ($isAdmin) include_settings(); else include_dashboard(); break;
             default: include_dashboard(); break;
         }
@@ -901,6 +909,98 @@ check_auth();
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </div>
+        <?php
+    }
+
+    function include_sql_schema() {
+        $sql = "
+CREATE DATABASE IF NOT EXISTS whatsapp;
+USE whatsapp;
+
+CREATE TABLE sucursales (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE roles (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(50) NOT NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE usuarios (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    id_rol INT,
+    id_sucursal INT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE ajustes (
+    clave VARCHAR(255) PRIMARY KEY,
+    valor TEXT,
+    id_sucursal INT DEFAULT 0
+) ENGINE=InnoDB;
+
+CREATE TABLE instancias_wa (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    id_sucursal INT,
+    nombre_identificador VARCHAR(255),
+    instance_name VARCHAR(255),
+    gateway_url VARCHAR(255),
+    api_key VARCHAR(255),
+    webhook_token VARCHAR(255),
+    estado VARCHAR(50) DEFAULT 'desconectado'
+) ENGINE=InnoDB;
+
+CREATE TABLE memoria (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    id_sucursal INT DEFAULT 1,
+    tipo VARCHAR(50),
+    fuente VARCHAR(255),
+    contenido LONGTEXT,
+    fecha DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE chats (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    id_instancia INT DEFAULT 1,
+    remitente VARCHAR(50),
+    mensaje TEXT,
+    respuesta TEXT,
+    modo VARCHAR(20) DEFAULT 'auto',
+    id_usuario_asignado INT DEFAULT 0,
+    fecha DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE campanas (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    id_instancia INT DEFAULT 1,
+    nombre VARCHAR(255),
+    mensaje TEXT,
+    destinatarios TEXT,
+    estado VARCHAR(50) DEFAULT 'pendiente',
+    fecha DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- Datos Iniciales
+INSERT INTO roles (id, nombre) VALUES (1, 'Admin'), (2, 'Operador');
+INSERT INTO sucursales (id, nombre) VALUES (1, 'Empresa Principal');
+-- Contraseña por defecto: admin123
+INSERT INTO usuarios (nombre, email, password, id_rol, id_sucursal)
+VALUES ('Administrador', 'admin@admin.com', '" . password_hash('admin123', PASSWORD_DEFAULT) . "', 1, 1);
+        ";
+        ?>
+        <div class="card p-4">
+            <h5 class="fw-bold mb-3"><i class="fas fa-code me-2"></i>Script de Inicialización SQL (MySQL)</h5>
+            <p class="text-muted small">Copia y ejecuta este script en tu servidor MySQL para crear la estructura necesaria.</p>
+            <textarea class="form-control bg-dark text-white font-monospace" rows="20" readonly><?php echo htmlspecialchars($sql); ?></textarea>
+            <div class="mt-3">
+                <button class="btn btn-primary" onclick="navigator.clipboard.writeText(this.previousElementSibling.value)">Copiar al portapapeles</button>
             </div>
         </div>
         <?php
