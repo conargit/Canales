@@ -1,0 +1,7 @@
+[Thu May 28 06:40:51 2026] PHP 8.3.6 Development Server (http://localhost:8000) started
+[Thu May 28 06:41:25 2026] [::1]:36800 Accepted
+[Thu May 28 06:41:25 2026] [::1]:36800 [200]: GET /scan.php
+[Thu May 28 06:41:25 2026] [::1]:36800 Closing
+[Thu May 28 06:41:40 2026] [::1]:54992 Accepted
+[Thu May 28 06:41:40 2026] [::1]:54992 [200]: GET /scan.php
+[Thu May 28 06:41:40 2026] [::1]:54992 Closing
