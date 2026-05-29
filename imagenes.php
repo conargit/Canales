@@ -1,14 +1,611 @@
 <?php
 /**
- * Visual Intelligence Center - Centro de Inteligencia Visual con IA
- * Versión 7.0 - Single File Edition
+ * ================================================================
+ *  SISTEMA COMPLETO DE GESTIÓN DE IMÁGENES CON IA — imagenes.php
+ *  Multi-AI: Google Gemini + OpenAI + Anthropic Claude
+ *  Generación de imágenes + Cámara + Análisis Visual + CRUD
+ *  TODO EN UN SOLO ARCHIVO
+ * ================================================================
  */
 
-error_reporting(E_ALL);
-ini_set('display_errors', 0); // Ocultar en producción, usar logs
-session_start();
+ob_start();
 
-// --- SEGURIDAD ---
+// ── Error handlers ──
+set_error_handler(function($errno, $errstr, $errfile, $errline) {
+    if (isset($_GET['action']) || isset($_POST['action'])) {
+        while (ob_get_level()) ob_end_clean();
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success'=>false,'message'=>"PHP Error [$errno]: $errstr en ".basename($errfile).":$errline"]);
+        exit;
+    }
+    return false;
+});
+
+register_shutdown_function(function() {
+    $err = error_get_last();
+    if ($err && in_array($err['type'], [E_ERROR,E_PARSE,E_CORE_ERROR,E_COMPILE_ERROR])) {
+        while (ob_get_level()) ob_end_clean();
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success'=>false,'message'=>'PHP Fatal: '.$err['message'].' en '.basename($err['file']).':'.$err['line']]);
+        exit;
+    }
+});
+
+@ini_set('upload_max_filesize','500M');
+@ini_set('post_max_size','600M');
+@ini_set('max_execution_time','300');
+@ini_set('max_input_time','300');
+@ini_set('memory_limit','512M');
+@ini_set('display_errors','0');
+error_reporting(0);
+
+if (session_status() === PHP_SESSION_NONE) @session_start();
+if (!isset($_SESSION['csrf_token'])) $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+
+// ──────────────────────────────────────────────────────────────
+// CONFIGURACIÓN
+// ──────────────────────────────────────────────────────────────
+$sd = dirname($_SERVER['SCRIPT_NAME']);
+if ($sd === '/' || $sd === '\\') $sd = '';
+
+$CONFIG = [
+    'upload_dir'    => __DIR__ . '/imagenes/',
+    'upload_url'    => $sd . '/imagenes/',
+    'generated_dir' => __DIR__ . '/imagenes/generated/',
+    'generated_url' => $sd . '/imagenes/generated/',
+    'max_file_size' => 0,
+    'blocked_exts'  => ['php','phtml','php3','php4','php5','php7','php8','pht','phar',
+                        'shtml','htaccess','htpasswd','asp','aspx','jsp','cgi','pl',
+                        'py','sh','bat','cmd','exe','msi','com','vbs','jar'],
+    'items_per_page'=> 999,
+
+    // ═══════════════════════════════════════════════════════
+    // CLAVES API — Configura las que tengas
+    // ══════════════════════════════════════════════════â••═════
+    // Google Gemini (GRATIS con límites): https://aistudio.google.com/apikey
+    'gemini_api_key' => '',
+
+    // OpenAI (GPT-4o Vision + DALL-E 3): https://platform.openai.com/api-keys
+    'openai_api_key' => '',
+
+    // Anthropic Claude (Vision): https://console.anthropic.com/
+    'claude_api_key' => '',
+
+    // Modelos por defecto
+    'gemini_model'     => 'gemini-2.0-flash-exp',
+    'openai_model'     => 'gpt-4o-mini',
+    'claude_model'     => 'claude-3-5-sonnet-20241022',
+    'dalle_model'      => 'dall-e-3',
+    'ai_max_tokens'    => 2048,
+];
+
+// ── Cargar configuración guardada (sobreescribe defaults) ──
+$cfg_file = __DIR__ . '/config_ai.json';
+if (file_exists($cfg_file)) {
+    $saved = @json_decode(file_get_contents($cfg_file), true);
+    if (is_array($saved)) {
+        foreach ($saved as $k => $v) {
+            if (isset($CONFIG[$k])) $CONFIG[$k] = $v;
+        }
+    }
+}
+
+// ── Crear directorios ──
+foreach ([$CONFIG['upload_dir'], $CONFIG['generated_dir']] as $dir) {
+    if (!is_dir($dir)) @mkdir($dir, 0775, true);
+}
+
+// ──────────────────────────────────────────────────────────────
+// FUNCIONES UTILITARIAS
+// ──────────────────────────────────────────────────────────────
+function json_out($data, $code = 200) {
+    while (ob_get_level()) ob_end_clean();
+    http_response_code($code);
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-cache, no-store');
+    echo json_encode($data, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+function getAIConfig() {
+    global $cfg_file;
+    if (!file_exists($cfg_file)) return [];
+    return json_decode(file_get_contents($cfg_file), true) ?: [];
+}
+
+function sanitize_filename($name) {
+    $name = preg_replace('/[<>"\'|\\\\\/:\*\?]/', '', $name);
+    $name = preg_replace('/\s+/', '_', $name);
+    $name = trim($name, '._- ');
+    return empty($name) ? 'imagen' : $name;
+}
+
+function format_size($bytes) {
+    if ($bytes <= 0) return '0 B';
+    if ($bytes >= 1073741824) return number_format($bytes / 1073741824, 2) . ' GB';
+    if ($bytes >= 1048576)    return number_format($bytes / 1048576, 2) . ' MB';
+    if ($bytes >= 1024)       return number_format($bytes / 1024, 2) . ' KB';
+    return $bytes . ' B';
+}
+
+function get_image_info($filepath, $filename) {
+    global $CONFIG;
+    $full = $filepath . $filename;
+    if (!file_exists($full)) return null;
+    $info = [
+        'name'      => $filename,
+        'size'      => @filesize($full),
+        'size_fmt'  => format_size(@filesize($full)),
+        'modified'  => date('d/m/Y H:i', @filemtime($full)),
+        'url'       => (strpos($filepath, 'generated') !== false ? $CONFIG['generated_url'] : $CONFIG['upload_url']) . rawurlencode($filename),
+        'dimensions'=> '—',
+        'width'     => 0,
+        'height'    => 0,
+        'ext'       => strtolower(pathinfo($filename, PATHINFO_EXTENSION)),
+        'generated' => strpos($filepath, 'generated') !== false,
+    ];
+    if ($info['ext'] === 'svg' || $info['ext'] === 'svgz') {
+        $info['dimensions'] = 'SVG';
+    } else {
+        $dim = @getimagesize($full);
+        if ($dim) {
+            $info['width']  = $dim[0];
+            $info['height'] = $dim[1];
+            $info['dimensions'] = $dim[0] . ' x ' . $dim[1];
+        }
+    }
+    return $info;
+}
+
+function get_all_images() {
+    global $CONFIG;
+    $images = [];
+    foreach ([$CONFIG['upload_dir'], $CONFIG['generated_dir']] as $dir) {
+        if (!is_dir($dir)) continue;
+        $files = @scandir($dir, SCANDIR_SORT_DESCENDING);
+        if (!$files) continue;
+        $skip = ['.','..','.htaccess','index.php','.user.ini','.config.json'];
+        foreach ($files as $f) {
+            if (in_array($f, $skip) || is_dir($dir . $f)) continue;
+            $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
+            if (in_array($ext, $CONFIG['blocked_exts'])) continue;
+            $img = get_image_info($dir, $f);
+            if ($img) $images[] = $img;
+        }
+    }
+    return $images;
+}
+
+function ai_providers() {
+    global $CONFIG;
+    $p = [];
+    if (!empty($CONFIG['gemini_api_key']))  $p[] = 'gemini';
+    if (!empty($CONFIG['openai_api_key']))  $p[] = 'openai';
+    if (!empty($CONFIG['claude_api_key']))  $p[] = 'claude';
+    return $p;
+}
+
+function first_ai_provider() {
+    $p = ai_providers();
+    return $p ? $p[0] : null;
+}
+
+// ──────────────────────────────────────────────────────────────
+// ANÁLISIS CON GOOGLE GEMINI
+// ──────────────────────────────────────────────────────────────
+function analyze_gemini($filepath, $filename, $prompt_extra = '') {
+    global $CONFIG;
+    if (empty($CONFIG['gemini_api_key']))
+        return ['success'=>false,'message'=>'Gemini API Key no configurada.'];
+
+    $imageData = @file_get_contents($filepath);
+    if ($imageData === false) return ['success'=>false,'message'=>'No se pudo leer la imagen.'];
+    if (strlen($imageData) > 18*1024*1024) return ['success'=>false,'message'=>'Imagen muy grande para Gemini (>18MB).'];
+
+    $base64 = base64_encode($imageData);
+    $mimeType = @mime_content_type($filepath) ?: 'image/jpeg';
+
+    $prompt = 'Eres un experto creativo en fotografía, diseño gráfico, marketing digital y arte visual. Analiza esta imagen en detalle y responde SIEMPRE en español con este formato:
+
+📋 DESCRIPCIÓN:
+[Descripción detallada y completa de lo que se ve en la imagen: sujetos, objetos, escena, ambiente]
+
+💡 TÍTULOS SUGERIDOS:
+[5 títulos creativos y atractivos para la imagen, numerados]
+
+📱 USOS RECOMENDADOS:
+[5 sugerencias específicas de dónde y cómo usar esta imagen: redes sociales, web, impresión, publicidad, etc.]
+
+🏷️ TEXTO ALT (SEO):
+[Texto alternativo optimizado para SEO, conciso y descriptivo]
+
+🎨 ESTILO Y COMPOSICIÓN:
+[Análisis del estilo visual, colores dominantes, composición, iluminación, perspectiva, técnica]
+
+✍️ CAPTIONS PARA REDES:
+[3 pies de foto listos para usar en Instagram/Facebook/LinkedIn con emojis]
+
+🔄 MEJORAS SUGERIDAS:
+[3-5 ideas concretas para mejorar o transformar esta imagen: edición, composición, estilo]';
+
+    if ($prompt_extra) $prompt .= "\n\nContexto adicional del usuario: $prompt_extra";
+
+    $payload = [
+        'contents' => [[
+            'parts' => [
+                ['text' => $prompt],
+                ['inline_data' => ['mime_type' => $mimeType, 'data' => $base64]]
+            ]
+        ]],
+        'generationConfig' => [
+            'temperature' => 0.8,
+            'maxOutputTokens' => $CONFIG['ai_max_tokens'],
+        ]
+    ];
+
+    $ch = curl_init("https://generativelanguage.googleapis.com/v1beta/models/{$CONFIG['gemini_model']}:generateContent?key={$CONFIG['gemini_api_key']}");
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 90,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErr = curl_error($ch);
+    curl_close($ch);
+
+    if ($curlErr) return ['success'=>false,'message'=>'cURL Error: '.$curlErr];
+    $data = json_decode($response, true);
+    if ($httpCode !== 200) {
+        $msg = $data['error']['message'] ?? "HTTP $httpCode";
+        return ['success'=>false,'message'=>"Gemini Error: $msg"];
+    }
+    $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+    if (empty($text)) return ['success'=>false,'message'=>'Gemini no generó respuesta.'];
+
+    return ['success'=>true,'type'=>'ai','provider'=>'gemini','model'=>$CONFIG['gemini_model'],'ideas'=>[$text]];
+}
+
+// ──────────────────────────────────────────────────────────────
+// ANÁLISIS CON OPENAI (GPT-4o Vision)
+// ──────────────────────────────────────────────────────────────
+function analyze_openai($filepath, $filename, $prompt_extra = '') {
+    global $CONFIG;
+    if (empty($CONFIG['openai_api_key']))
+        return ['success'=>false,'message'=>'OpenAI API Key no configurada.'];
+
+    $imageData = @file_get_contents($filepath);
+    if ($imageData === false) return ['success'=>false,'message'=>'No se pudo leer la imagen.'];
+    if (strlen($imageData) > 15*1024*1024) return ['success'=>false,'message'=>'Imagen muy grande para OpenAI (>15MB).'];
+
+    $base64 = base64_encode($imageData);
+    $mimeType = @mime_content_type($filepath) ?: 'image/jpeg';
+
+    $prompt = 'Eres un experto creativo en fotografía, diseño gráfico, marketing digital y arte visual. Analiza esta imagen en detalle y responde SIEMPRE en español con este formato:
+
+📋 DESCRIPCIÓN:
+[Descripción detallada y completa de lo que se ve en la imagen]
+
+💡 TÍTULOS SUGERIDOS:
+[5 títulos creativos y atractivos para la imagen]
+
+📱 USOS RECOMENDADOS:
+[5 sugerencias específicas de dónde y cómo usar esta imagen]
+
+🏷️ TEXTO ALT (SEO):
+[Texto alternativo optimizado para SEO]
+
+🎨 ESTILO Y COMPOSICIÓN:
+[Análisis del estilo visual, colores dominantes, composición, iluminación]
+
+✍️ CAPTIONS PARA REDES:
+[3 pies de foto listos para usar en Instagram/Facebook/LinkedIn con emojis]
+
+🔄 MEJORAS SUGERIDAS:
+[3-5 ideas concretas para mejorar o transformar esta imagen]';
+
+    if ($prompt_extra) $prompt .= "\n\nContexto adicional del usuario: $prompt_extra";
+
+    $payload = [
+        'model' => $CONFIG['openai_model'],
+        'messages' => [
+            ['role'=>'system','content'=>$prompt],
+            ['role'=>'user','content'=>[
+                ['type'=>'text','text'=>'Analiza esta imagen y genera ideas creativas:'],
+                ['type'=>'image_url','image_url'=>['url'=>"data:{$mimeType};base64,{$base64}",'detail'=>'auto']]
+            ]]
+        ],
+        'max_tokens' => $CONFIG['ai_max_tokens'],
+    ];
+
+    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_HTTPHEADER     => ['Content-Type: application/json','Authorization: Bearer '.$CONFIG['openai_api_key']],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 90,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErr = curl_error($ch);
+    curl_close($ch);
+
+    if ($curlErr) return ['success'=>false,'message'=>'cURL Error: '.$curlErr];
+    $data = json_decode($response, true);
+    if ($httpCode !== 200) {
+        $msg = $data['error']['message'] ?? "HTTP $httpCode";
+        return ['success'=>false,'message'=>"OpenAI Error: $msg"];
+    }
+    $text = $data['choices'][0]['message']['content'] ?? '';
+    if (empty($text)) return ['success'=>false,'message'=>'OpenAI no generó respuesta.'];
+
+    return ['success'=>true,'type'=>'ai','provider'=>'openai','model'=>$CONFIG['openai_model'],'tokens'=>$data['usage']??null,'ideas'=>[$text]];
+}
+
+// ──────────────────────────────────────────────────────────────
+// ANÁLISIS CON ANTHROPIC CLAUDE
+// ──────────────────────────────────────────────────────────────
+function analyze_claude($filepath, $filename, $prompt_extra = '') {
+    global $CONFIG;
+    if (empty($CONFIG['claude_api_key']))
+        return ['success'=>false,'message'=>'Claude API Key no configurada.'];
+
+    $imageData = @file_get_contents($filepath);
+    if ($imageData === false) return ['success'=>false,'message'=>'No se pudo leer la imagen.'];
+    if (strlen($imageData) > 15*1024*1024) return ['success'=>false,'message'=>'Imagen muy grande para Claude (>15MB).'];
+
+    $base64 = base64_encode($imageData);
+    $mimeType = @mime_content_type($filepath) ?: 'image/jpeg';
+
+    $prompt = 'Eres un experto creativo en fotografía, diseño gráfico, marketing digital y arte visual. Analiza esta imagen en detalle y responde SIEMPRE en español con este formato:
+
+📋 DESCRIPCIÓN:
+[Descripción detallada y completa de lo que se ve en la imagen]
+
+💡 TÍTULOS SUGERIDOS:
+[5 títulos creativos y atractivos para la imagen]
+
+📱 USOS RECOMENDADOS:
+[5 sugerencias específicas de dónde y cómo usar esta imagen]
+
+🏷️ TEXTO ALT (SEO):
+[Texto alternativo optimizado para SEO]
+
+🎨 ESTILO Y COMPOSICIÓN:
+[Análisis del estilo visual, colores dominantes, composición, iluminación]
+
+✍️ CAPTIONS PARA REDES:
+[3 pies de foto listos para usar en Instagram/Facebook/LinkedIn con emojis]
+
+🔄 MEJORAS SUGERIDAS:
+[3-5 ideas concretas para mejorar o transformar esta imagen]';
+
+    if ($prompt_extra) $prompt .= "\n\nContexto adicional del usuario: $prompt_extra";
+
+    $payload = [
+        'model' => $CONFIG['claude_model'],
+        'max_tokens' => $CONFIG['ai_max_tokens'],
+        'messages' => [[
+            'role' => 'user',
+            'content' => [
+                ['type'=>'image','source'=>['type'=>'base64','media_type'=>$mimeType,'data'=>$base64]],
+                ['type'=>'text','text'=>$prompt]
+            ]
+        ]]
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_HTTPHEADER     => [
+            'Content-Type: application/json',
+            'x-api-key: '.$CONFIG['claude_api_key'],
+            'anthropic-version: 2023-06-01',
+        ],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 90,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErr = curl_error($ch);
+    curl_close($ch);
+
+    if ($curlErr) return ['success'=>false,'message'=>'cURL Error: '.$curlErr];
+    $data = json_decode($response, true);
+    if ($httpCode !== 200) {
+        $msg = $data['error']['message'] ?? "HTTP $httpCode";
+        return ['success'=>false,'message'=>"Claude Error: $msg"];
+    }
+    $text = $data['content'][0]['text'] ?? '';
+    if (empty($text)) return ['success'=>false,'message'=>'Claude no generó respuesta.'];
+
+    return ['success'=>true,'type'=>'ai','provider'=>'claude','model'=>$CONFIG['claude_model'],'tokens'=>['input'=>$data['usage']['input_tokens']??0,'output'=>$data['usage']['output_tokens']??0],'ideas'=>[$text]];
+}
+
+// ──────────────────────────────────────────────────────────────
+// ANÁLISIS BÁSICO (sin IA)
+// ──────────────────────────────────────────────────────────────
+function analyze_basic($filepath, $filename) {
+    $info = get_image_info($filepath, $filename);
+    if (!$info) return ['success'=>false,'message'=>'No se pudo leer la imagen.'];
+
+    $ideas = [];
+    $ext = $info['ext'];
+    $ratio = $info['width'] / max(1, $info['height']);
+    if ($ratio > 1.5) $orient = 'panorámica horizontal';
+    elseif ($ratio > 1.1) $orient = 'horizontal';
+    elseif ($ratio < 0.66) $orient = 'panorámica vertical';
+    elseif ($ratio < 0.9) $orient = 'vertical';
+    else $orient = 'cuadrada';
+
+    $ideas[] = "Formato: " . strtoupper($ext);
+    $ideas[] = "Orientación: " . $orient . " (" . $info['dimensions'] . ")";
+    $ideas[] = "Tamaño: " . $info['size_fmt'];
+
+    if ($ext === 'svg') {
+        $ideas[] = 'Ideal para logos, iconos e ilustraciones vectoriales';
+    } elseif ($ext === 'gif') {
+        $ideas[] = 'Puede ser animada — ideal para memes o reacciones';
+    } elseif ($ext === 'webp') {
+        $ideas[] = 'Formato moderno web — excelente rendimiento';
+    } elseif (in_array($ext, ['jpg','jpeg','png'])) {
+        if ($info['width'] >= 3000 || $info['height'] >= 3000)
+            $ideas[] = 'Alta resolución — ideal para impresión o fondos';
+        elseif ($info['width'] >= 1200 || $info['height'] >= 1200)
+            $ideas[] = 'Buena resolución — adecuada para banners y publicaciones';
+        else
+            $ideas[] = 'Resolución media — ideal para thumbnails o avatares';
+    }
+    if ($orient === 'panorámica horizontal') $ideas[] = 'Perfecta para cabeceras web, banners o portadas';
+    if ($orient === 'vertical' || $orient === 'panorámica vertical') $ideas[] = 'Ideal para Stories Instagram, TikTok, Pinterest';
+    if ($orient === 'cuadrada') $ideas[] = 'Perfecta para publicaciones de Instagram o miniaturas';
+    if ($info['size'] > 5*1024*1024) $ideas[] = 'Archivo pesado — considerar comprimir';
+
+    return ['success'=>true,'type'=>'basic','ideas'=>$ideas,'ai_available'=>count(ai_providers())>0];
+}
+
+// ──────────────────────────────────────────────────────────────
+// GENERACIÓN DE IMÁGENES CON DALL-E 3
+// ──────────────────────────────────────────────────────────────
+function generate_image_openai($prompt, $size = '1024x1024') {
+    global $CONFIG;
+    if (empty($CONFIG['openai_api_key']))
+        return ['success'=>false,'message'=>'OpenAI API Key no configurada para generar imágenes.'];
+
+    $payload = [
+        'model'  => $CONFIG['dalle_model'],
+        'prompt' => $prompt,
+        'n'      => 1,
+        'size'   => $size,
+        'quality'=> 'standard',
+        'response_format' => 'b64_json',
+    ];
+
+    $ch = curl_init('https://api.openai.com/v1/images/generations');
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_HTTPHEADER     => ['Content-Type: application/json','Authorization: Bearer '.$CONFIG['openai_api_key']],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 120,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErr = curl_error($ch);
+    curl_close($ch);
+
+    if ($curlErr) return ['success'=>false,'message'=>'cURL Error: '.$curlErr];
+    $data = json_decode($response, true);
+    if ($httpCode !== 200) {
+        $msg = $data['error']['message'] ?? "HTTP $httpCode";
+        return ['success'=>false,'message'=>"DALL-E Error: $msg"];
+    }
+
+    $b64 = $data['data'][0]['b64_json'] ?? '';
+    if (empty($b64)) return ['success'=>false,'message'=>'DALL-E no generó imagen.'];
+
+    // Guardar imagen generada
+    $imgData = base64_decode($b64);
+    $safeName = sanitize_filename(substr($prompt, 0, 40)) . '_' . time() . '.png';
+    $savePath = $CONFIG['generated_dir'] . $safeName;
+    if (@file_put_contents($savePath, $imgData) === false)
+        return ['success'=>false,'message'=>'No se pudo guardar la imagen generada.'];
+
+    @chmod($savePath, 0644);
+    $info = get_image_info($CONFIG['generated_dir'], $safeName);
+
+    return ['success'=>true,'provider'=>'openai','model'=>$CONFIG['dalle_model'],'image'=>$info,'revised_prompt'=>$data['data'][0]['revised_prompt']??''];
+}
+
+// ──────────────────────────────────────────────────────────────
+// GENERACIÓN DE IMÁGENES CON GEMINI (Imagen 3 / 2.0 Flash)
+// ──────────────────────────────────────────────────────────────
+function generate_image_gemini($prompt, $size = '1024x1024') {
+    global $CONFIG;
+    if (empty($CONFIG['gemini_api_key']))
+        return ['success'=>false,'message'=>'Gemini API Key no configurada para generar imágenes.'];
+
+    $payload = [
+        'contents' => [[
+            'parts' => [['text' => "Generate an image: $prompt"]]
+        ]],
+        'generationConfig' => [
+            'responseModalities' => ['TEXT', 'IMAGE'],
+        ]
+    ];
+
+    $ch = curl_init("https://generativelanguage.googleapis.com/v1beta/models/{$CONFIG['gemini_model']}:generateContent?key={$CONFIG['gemini_api_key']}");
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 120,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErr = curl_error($ch);
+    curl_close($ch);
+
+    if ($curlErr) return ['success'=>false,'message'=>'cURL Error: '.$curlErr];
+    $data = json_decode($response, true);
+    if ($httpCode !== 200) {
+        $msg = $data['error']['message'] ?? "HTTP $httpCode";
+        return ['success'=>false,'message'=>"Gemini Image Error: $msg"];
+    }
+
+    // Buscar imagen en la respuesta
+    $parts = $data['candidates'][0]['content']['parts'] ?? [];
+    $imgB64 = null;
+    $mimeType = 'image/png';
+    foreach ($parts as $part) {
+        if (isset($part['inline_data'])) {
+            $imgB64 = $part['inline_data']['data'];
+            $mimeType = $part['inline_data']['mime_type'] ?? 'image/png';
+            break;
+        }
+    }
+
+    if (empty($imgB64)) {
+        $text = '';
+        foreach ($parts as $part) {
+            if (isset($part['text'])) $text .= $part['text'];
+        }
+        return ['success'=>false,'message'=>'Gemini no generó imagen. '.($text ? 'Respuesta: '.substr($text,0,200) : 'El modelo puede no soportar generación de imágenes.')];
+    }
+
+    $imgData = base64_decode($imgB64);
+    $ext = ($mimeType === 'image/jpeg') ? 'jpg' : 'png';
+    $safeName = sanitize_filename(substr($prompt, 0, 40)) . '_' . time() . '.' . $ext;
+    $savePath = $CONFIG['generated_dir'] . $safeName;
+    if (@file_put_contents($savePath, $imgData) === false)
+        return ['success'=>false,'message'=>'No se pudo guardar la imagen generada.'];
+
+    @chmod($savePath, 0644);
+    $info = get_image_info($CONFIG['generated_dir'], $safeName);
+
+    return ['success'=>true,'provider'=>'gemini','model'=>$CONFIG['gemini_model'],'image'=>$info];
+}
+
+// ──────────────────────────────────────────────────────────────
+// SEGURIDAD & SESIÓN
+// ──────────────────────────────────────────────────────────────
 define('ADMIN_PASS', 'admin123');
 
 if (isset($_GET['logout'])) {
@@ -20,394 +617,228 @@ if (isset($_GET['logout'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login_pass'])) {
     if ($_POST['login_pass'] === ADMIN_PASS) {
         $_SESSION['authenticated'] = true;
-        jsonResponse(['message' => 'Login exitoso']);
+        json_out(['success' => true, 'message' => 'Login exitoso']);
     } else {
-        jsonResponse(['error' => 'Contraseña incorrecta'], false);
+        json_out(['success' => false, 'error' => 'Contraseña incorrecta'], 401);
     }
 }
 
-// Bloquear acceso si no está autenticado (excepto para login)
 if (!isset($_SESSION['authenticated']) || $_SESSION['authenticated'] !== true) {
-    // Si es una petición AJAX/API
     if (isset($_GET['action']) || isset($_POST['action'])) {
-        jsonResponse(['error' => 'No autorizado'], false);
-    }
-    // Si es carga de página, mostrar formulario de login más abajo en el HTML
-}
-
-// --- CONFIGURACIÓN Y DIRECTORIOS ---
-$base_dir = 'imagenes/';
-$config_file = 'config_ai.json';
-$history_file = 'historial_ai.json';
-
-if (!file_exists($base_dir)) mkdir($base_dir, 0775, true);
-
-// --- UTILIDADES ---
-function jsonResponse($data, $success = true) {
-    header('Content-Type: application/json');
-    echo json_encode(array_merge(['success' => $success], $data));
-    exit;
-}
-
-function getAIConfig() {
-    global $config_file;
-    if (!file_exists($config_file)) return [];
-    return json_decode(file_get_contents($config_file), true) ?: [];
-}
-
-function saveAIConfig($config) {
-    global $config_file;
-    return file_put_contents($config_file, json_encode($config, JSON_PRETTY_PRINT));
-}
-
-function getAIHistory() {
-    global $history_file;
-    if (!file_exists($history_file)) return [];
-    return json_decode(file_get_contents($history_file), true) ?: [];
-}
-
-function saveAIHistory($entry) {
-    global $history_file;
-    $history = getAIHistory();
-    array_unshift($history, array_merge(['id' => uniqid(), 'timestamp' => date('Y-m-d H:i:s')], $entry));
-    // Limitar a los últimos 50 registros
-    $history = array_slice($history, 0, 50);
-    return file_put_contents($history_file, json_encode($history, JSON_PRETTY_PRINT));
-}
-
-// --- ACCIONES DE ARCHIVOS ---
-$action = $_GET['action'] ?? $_POST['action'] ?? null;
-
-if ($action === 'upload') {
-    if (!isset($_FILES['image']) || $_FILES['image']['error'] !== UPLOAD_ERR_OK) {
-        jsonResponse(['error' => 'Error al subir la imagen'], false);
-    }
-
-    $allowed = ['jpg', 'jpeg', 'png', 'webp'];
-    $ext = strtolower(pathinfo($_FILES['image']['name'], PATHINFO_EXTENSION));
-
-    if (!in_array($ext, $allowed)) {
-        jsonResponse(['error' => 'Formato no permitido. Use JPG, PNG o WEBP.'], false);
-    }
-
-    $filename = time() . '_' . preg_replace("/[^a-zA-Z0-9\._-]/", "", $_FILES['image']['name']);
-    if (move_uploaded_file($_FILES['image']['tmp_name'], $base_dir . $filename)) {
-        jsonResponse(['message' => 'Imagen subida con éxito', 'filename' => $filename]);
-    } else {
-        jsonResponse(['error' => 'No se pudo guardar el archivo'], false);
+        json_out(['success' => false, 'error' => 'No autorizado'], 403);
     }
 }
 
-if ($action === 'list') {
-    $search = $_GET['search'] ?? '';
-    $files = array_diff(scandir($base_dir), ['.', '..']);
-    $result = [];
+// ──────────────────────────────────────────────────────────────
+// ROUTER AJAX
+// ──────────────────────────────────────────────────────────────
+$action = isset($_GET['action']) ? $_GET['action'] : (isset($_POST['action']) ? $_POST['action'] : null);
 
-    foreach ($files as $file) {
-        if ($search && stripos($file, $search) === false) continue;
-        $result[] = [
-            'name' => $file,
-            'url' => $base_dir . $file,
-            'size' => round(filesize($base_dir . $file) / 1024, 2) . ' KB',
-            'date' => date("Y-m-d H:i:s", filemtime($base_dir . $file))
-        ];
-    }
-    // Ordenar por fecha descendente
-    usort($result, function($a, $b) { return strcmp($b['date'], $a['date']); });
-    jsonResponse(['files' => $result]);
-}
-
-if ($action === 'delete') {
-    $filename = $_POST['filename'] ?? '';
-    $path = $base_dir . basename($filename);
-    if ($filename && file_exists($path)) {
-        unlink($path);
-        jsonResponse(['message' => 'Archivo eliminado']);
-    }
-    jsonResponse(['error' => 'Archivo no encontrado'], false);
-}
-
-if ($action === 'rename') {
-    $oldname = $_POST['oldname'] ?? '';
-    $newname = $_POST['newname'] ?? '';
-    $oldpath = $base_dir . basename($oldname);
-    $newpath = $base_dir . basename($newname);
-
-    if (file_exists($oldpath) && !file_exists($newpath)) {
-        rename($oldpath, $newpath);
-        jsonResponse(['message' => 'Archivo renombrado']);
-    }
-    jsonResponse(['error' => 'Error al renombrar'], false);
-}
-
-// --- AI LOGIC ---
-function callGemini($key, $imagePath, $prompt) {
-    $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=$key";
-    $imageData = base64_encode(file_get_contents($imagePath));
-    $mimeType = mime_content_type($imagePath);
-
-    $payload = [
-        "contents" => [[
-            "parts" => [
-                ["text" => $prompt],
-                ["inline_data" => ["mime_type" => $mimeType, "data" => $imageData]]
-            ]
-        ]],
-        "generationConfig" => ["responseModalities" => ["TEXT", "IMAGE"]]
-    ];
-
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-    $response = curl_exec($ch);
-    curl_close($ch);
-    return json_decode($response, true);
-}
-
-function callDalle($key, $prompt) {
-    $url = "https://api.openai.com/v1/images/generations";
-    $payload = [
-        "model" => "dall-e-3",
-        "prompt" => $prompt,
-        "n" => 1,
-        "size" => "1024x1024",
-        "response_format" => "b64_json"
-    ];
-
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json',
-        'Authorization: Bearer ' . $key
-    ]);
-    $response = curl_exec($ch);
-    curl_close($ch);
-    return json_decode($response, true);
-}
-
-function callOpenAI($key, $imagePath, $prompt) {
-    $url = "https://api.openai.com/v1/chat/completions";
-    $imageData = base64_encode(file_get_contents($imagePath));
-    $mimeType = mime_content_type($imagePath);
-
-    $payload = [
-        "model" => "gpt-4o",
-        "messages" => [[
-            "role" => "user",
-            "content" => [
-                ["type" => "text", "text" => $prompt],
-                ["type" => "image_url", "image_url" => ["url" => "data:$mimeType;base64,$imageData"]]
-            ]
-        ]]
-    ];
-
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json',
-        'Authorization: Bearer ' . $key
-    ]);
-    $response = curl_exec($ch);
-    curl_close($ch);
-    return json_decode($response, true);
-}
-
-if ($action === 'ai_chat') {
-    $config = getAIConfig();
-    $filename = $_POST['filename'] ?? '';
-    $prompt = $_POST['prompt'] ?? '';
-    $type = $_POST['type'] ?? 'chat';
-    $path = $base_dir . basename($filename);
-
-    if (!file_exists($path)) jsonResponse(['error' => 'Imagen no encontrada'], false);
-
-    $provider = $config['provider'] ?? 'gemini';
-    $key = ($provider === 'gemini') ? ($config['gemini_key'] ?? '') : ($config['openai_key'] ?? '');
-
-    if (!$key) jsonResponse(['error' => 'API Key no configurada para ' . $provider], false);
-
-    // Prompt engineering según el tipo
-    $finalPrompt = $prompt;
-    $numVariants = 1;
-
-    switch($type) {
-        case 'analyze': $finalPrompt = "Analiza detalladamente esta imagen. ¿Qué ves? Describe elementos, ambiente y calidad."; break;
-        case 'decor': $finalPrompt = "Actúa como un diseñador de interiores. Dame 5 ideas creativas para decorar o mejorar este espacio/imagen."; break;
-        case 'marketing': $finalPrompt = "Genera una estrategia de marketing para esta imagen: un copy persuasivo para Instagram, 10 hashtags y un título gancho."; break;
-        case 'seo': $finalPrompt = "Genera un título SEO, una meta-descripción de 150 caracteres y un texto Alt optimizado para esta imagen."; break;
-        case 'variants':
-            $finalPrompt = "Genera una nueva versión visual de esta imagen con un diseño moderno, premium y optimizado. Mantén la estructura pero mejora el estilo.";
-            $numVariants = 3;
-            break;
-    }
-
-    try {
-        $responseText = "";
-        $generatedImages = [];
-
-        if ($provider === 'gemini') {
-            for ($i = 0; $i < $numVariants; $i++) {
-                $response = callGemini($key, $path, $finalPrompt);
-                $responseText .= ($response['candidates'][0]['content']['parts'][0]['text'] ?? '') . "\n\n";
-
-                if (isset($response['candidates'][0]['content']['parts'])) {
-                    foreach($response['candidates'][0]['content']['parts'] as $part) {
-                        if (isset($part['inline_data'])) {
-                            $imgData = base64_decode($part['inline_data']['data']);
-                            $newFilename = 'ai_' . time() . '_' . $i . '.png';
-                            file_put_contents($base_dir . $newFilename, $imgData);
-                            $generatedImages[] = $newFilename;
-                        }
-                    }
-                }
-                if ($type !== 'variants') break;
-            }
-        } else {
-            $response = callOpenAI($key, $path, $finalPrompt);
-            $responseText = $response['choices'][0]['message']['content'] ?? 'Sin respuesta de OpenAI';
-
-            if ($type === 'variants') {
-                $dalleResp = callDalle($key, "Basado en esta descripción: $responseText. Genera una imagen fotorrealista de alta calidad siguiendo el estilo solicitado.");
-                if (isset($dalleResp['data'][0]['b64_json'])) {
-                    $imgData = base64_decode($dalleResp['data'][0]['b64_json']);
-                    $newFilename = 'ai_dalle_' . time() . '.png';
-                    file_put_contents($base_dir . $newFilename, $imgData);
-                    $generatedImages[] = $newFilename;
-                }
-            }
+if ($action && isset($_SESSION['authenticated'])) {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $csrf = isset($_POST['csrf_token']) ? $_POST['csrf_token'] :
+                (isset($_SERVER['HTTP_X_CSRF_TOKEN']) ? $_SERVER['HTTP_X_CSRF_TOKEN'] : '');
+        if ($csrf && isset($_SESSION['csrf_token']) && !hash_equals($_SESSION['csrf_token'], $csrf)) {
+            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+            json_out(['success'=>false,'message'=>'Token expirado. Recarga la página.'], 403);
         }
+    }
 
-        saveAIHistory(['filename' => $filename, 'prompt' => $finalPrompt, 'response' => $responseText, 'provider' => $provider, 'result_images' => $generatedImages]);
-        jsonResponse(['response' => $responseText, 'new_images' => $generatedImages]);
+    switch ($action) {
 
-    } catch (Exception $e) {
-        jsonResponse(['error' => $e->getMessage()], false);
+        case 'ping':
+            json_out(['success'=>true,'time'=>date('H:i:s'),'providers'=>ai_providers(),'php'=>PHP_VERSION]);
+
+        case 'upload':
+            if (empty($_FILES['images'])) json_out(['success'=>false,'message'=>'No se recibieron archivos.'], 400);
+            $results = []; $errors = [];
+            $files = $_FILES['images'];
+            $count = is_array($files['name']) ? count($files['name']) : 1;
+            for ($i = 0; $i < $count; $i++) {
+                $name  = is_array($files['name'])     ? $files['name'][$i]     : $files['name'];
+                $tmp   = is_array($files['tmp_name']) ? $files['tmp_name'][$i] : $files['tmp_name'];
+                $size  = is_array($files['size'])     ? $files['size'][$i]     : $files['size'];
+                $error = is_array($files['error'])    ? $files['error'][$i]    : $files['error'];
+                if ($error !== UPLOAD_ERR_OK) {
+                    $errors[] = ['file'=>$name,'message'=>'Error '.$error]; continue;
+                }
+                $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+                if (in_array($ext, $CONFIG['blocked_exts'])) { $errors[] = ['file'=>$name,'message'=>'Bloqueado.']; continue; }
+                $safe = sanitize_filename(pathinfo($name, PATHINFO_FILENAME));
+                $final = $safe . '.' . $ext;
+                $c = 1;
+                while (file_exists($CONFIG['upload_dir'] . $final)) { $final = $safe . '_' . $c . '.' . $ext; $c++; }
+                if (@move_uploaded_file($tmp, $CONFIG['upload_dir'] . $final)) {
+                    @chmod($CONFIG['upload_dir'].$final,0644);
+                    $results[] = get_image_info($CONFIG['upload_dir'], $final);
+                } else {
+                    $errors[] = ['file'=>$name,'message'=>'Error al mover.'];
+                }
+            }
+            json_out(['success'=>count($results)>0,'uploaded'=>$results,'errors'=>$errors]);
+
+        case 'upload_camera':
+            $b64data = trim($_POST['image_data'] ?? '');
+            if (empty($b64data)) json_out(['success'=>false,'message'=>'Vacio.'], 400);
+            if (preg_match('/^data:image\/(\w+);base64,(.+)$/s', $b64data, $m)) {
+                $ext = $m[1] === 'jpeg' ? 'jpg' : $m[1];
+                $b64data = $m[2];
+            } else { $ext = 'png'; }
+            $imgData = @base64_decode($b64data);
+            $safe = sanitize_filename('camera_' . date('Ymd_His'));
+            $final = $safe . '.' . $ext;
+            if (@file_put_contents($CONFIG['upload_dir'] . $final, $imgData) === false) json_out(['success'=>false], 500);
+            @chmod($CONFIG['upload_dir'].$final, 0644);
+            json_out(['success'=>true,'image'=>get_image_info($CONFIG['upload_dir'], $final)]);
+
+        case 'list':
+            $images = get_all_images();
+            $search = trim($_GET['search']??'');
+            if ($search !== '') {
+                $images = array_values(array_filter($images, function($img) use ($search) { return stripos($img['name'],$search)!==false; }));
+            }
+            json_out(['success'=>true,'images'=>$images,'total'=>count($images)]);
+
+        case 'rename':
+            $on = trim($_POST['old_name']??''); $nn = trim($_POST['new_name']??'');
+            $is_gen = !empty($_POST['generated']);
+            $dir = $is_gen ? $CONFIG['generated_dir'] : $CONFIG['upload_dir'];
+            $ext = strtolower(pathinfo($on,PATHINFO_EXTENSION)); $safe = sanitize_filename($nn); $final = $safe.'.'.$ext;
+            if(@rename($dir.$on,$dir.$final)) json_out(['success'=>true,'new_name'=>$final]);
+            else json_out(['success'=>false],500);
+
+        case 'delete':
+            $names = $_POST['names']??[]; if(is_string($names))$names=[$names];
+            $gens = $_POST['generated']??[]; if(is_string($gens))$gens=[$gens];
+            $d=0;
+            foreach($names as $i=>$n){
+                $dir = !empty($gens[$i]) ? $CONFIG['generated_dir'] : $CONFIG['upload_dir'];
+                if(@unlink($dir.$n))$d++;
+            }
+            json_out(['success'=>$d>0,'deleted'=>$d]);
+
+        case 'stats':
+            $images = get_all_images(); $ts = array_sum(array_column($images,'size'));
+            json_out(['success'=>true,'total_files'=>count($images),'total_size'=>format_size($ts), 'providers'=>ai_providers(),
+                'gemini_set'=>!empty($CONFIG['gemini_api_key']),'openai_set'=>!empty($CONFIG['openai_api_key']),'claude_set'=>!empty($CONFIG['claude_api_key']),
+            ]);
+
+        case 'analyze':
+            $name = trim($_GET['name'] ?? '');
+            $provider = trim($_GET['provider'] ?? '');
+            $prompt_extra = trim($_GET['prompt'] ?? '');
+            $is_gen = !empty($_GET['generated']);
+            $dir = $is_gen ? $CONFIG['generated_dir'] : $CONFIG['upload_dir'];
+            $filepath = $dir . $name;
+            $providers = ai_providers();
+            if (empty($providers)) json_out(analyze_basic($filepath, $name));
+            $use = ($provider && in_array($provider, $providers)) ? $provider : $providers[0];
+            $result = match($use) {
+                'gemini' => analyze_gemini($filepath, $name, $prompt_extra),
+                'openai' => analyze_openai($filepath, $name, $prompt_extra),
+                'claude' => analyze_claude($filepath, $name, $prompt_extra),
+                default  => analyze_basic($filepath, $name),
+            };
+            json_out($result);
+
+        case 'generate':
+            $prompt = trim($_POST['prompt'] ?? '');
+            $provider = trim($_POST['provider'] ?? 'openai');
+            $size = trim($_POST['size'] ?? '1024x1024');
+            $result = ($provider === 'gemini') ? generate_image_gemini($prompt, $size) : generate_image_openai($prompt, $size);
+            json_out($result);
+
+        case 'save_config':
+            $new_config = [
+                'gemini_api_key' => trim($_POST['gemini_api_key'] ?? ''),
+                'openai_api_key' => trim($_POST['openai_api_key'] ?? ''),
+                'claude_api_key' => trim($_POST['claude_api_key'] ?? ''),
+                'gemini_model'   => trim($_POST['gemini_model'] ?? $CONFIG['gemini_model']),
+                'openai_model'   => trim($_POST['openai_model'] ?? $CONFIG['openai_model']),
+                'claude_model'   => trim($_POST['claude_model'] ?? $CONFIG['claude_model']),
+                'dalle_model'    => trim($_POST['dalle_model'] ?? $CONFIG['dalle_model']),
+                'ai_max_tokens'  => intval($_POST['ai_max_tokens'] ?? $CONFIG['ai_max_tokens']),
+            ];
+            @file_put_contents($cfg_file, json_encode($new_config, JSON_PRETTY_PRINT));
+            json_out(['success'=>true,'providers'=>ai_providers()]);
+
+        case 'get_config':
+            json_out(['success'=>true,'config'=>getAIConfig()]);
+
+        default: json_out(['success'=>false],400);
     }
 }
 
-if ($action === 'get_history') {
-    jsonResponse(['history' => getAIHistory()]);
-}
-
-if ($action === 'save_config') {
-    $config = [
-        'gemini_key' => $_POST['gemini_key'] ?? '',
-        'openai_key' => $_POST['openai_key'] ?? '',
-        'provider' => $_POST['provider'] ?? 'gemini'
-    ];
-    saveAIConfig($config);
-    jsonResponse(['message' => 'Configuración guardada']);
-}
-
-if ($action === 'get_config') {
-    jsonResponse(['config' => getAIConfig()]);
-}
-
-// --- RENDERING FRONTEND ---
+$csrf = $_SESSION['csrf_token'];
+while (ob_get_level()) ob_end_clean();
 ?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <title>Visual Intelligence Center</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- Bootstrap 5 -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Google Fonts: Orbitron & Montserrat -->
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --neon-cyan: #00f2ff;
-            --neon-purple: #bc13fe;
-            --dark-bg: #0a0b10;
-            --glass: rgba(255, 255, 255, 0.05);
-            --glass-border: rgba(255, 255, 255, 0.1);
-        }
-
-        body {
-            background-color: var(--dark-bg);
-            color: #e0e0e0;
-            font-family: 'Montserrat', sans-serif;
-            overflow-x: hidden;
-        }
-
-        .orbitron { font-family: 'Orbitron', sans-serif; }
-
-        .glass-card {
-            background: var(--glass);
-            backdrop-filter: blur(10px);
-            border: 1px solid var(--glass-border);
-            border-radius: 15px;
-            padding: 20px;
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-        }
-
-        .btn-neon-cyan {
-            border: 1px solid var(--neon-cyan);
-            color: var(--neon-cyan);
-            background: transparent;
-            transition: 0.3s;
-        }
-        .btn-neon-cyan:hover {
-            background: var(--neon-cyan);
-            color: black;
-            box-shadow: 0 0 15px var(--neon-cyan);
-        }
-
-        .gallery-img {
-            width: 100%;
-            height: 200px;
-            object-fit: cover;
-            border-radius: 10px;
-            cursor: pointer;
-            transition: 0.3s;
-        }
-        .gallery-img:hover {
-            transform: scale(1.05);
-            filter: brightness(1.2);
-        }
-
-        .sidebar {
-            height: 100vh;
-            border-right: 1px solid var(--glass-border);
-            padding: 20px;
-        }
-
-        .nav-link {
-            color: #aaa;
-            padding: 10px 15px;
-            border-radius: 8px;
-            margin-bottom: 5px;
-            transition: 0.3s;
-        }
-        .nav-link:hover, .nav-link.active {
-            background: var(--glass);
-            color: var(--neon-cyan);
-        }
-
-        .search-input {
-            background: var(--glass);
-            border: 1px solid var(--glass-border);
-            color: white;
-            border-radius: 20px;
-            padding: 10px 20px;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Visual Intelligence Center con IA</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0b10;--bg-alt:#111218;--fg:#e0e0e0;--fg-sec:#aaa;
+  --accent:#00f2ff;--accent-hover:#00d1db;--accent-fg:#000;
+  --border:rgba(255,255,255,0.1);--radius:10px;--radius-lg:15px;
+  --glass:rgba(255,255,255,0.05);
+  --success:#16a34a;--error:#dc2626;--gemini:#4285f4;--openai:#10a37f;--claude:#d97706;
+  --shadow:0 8px 32px 0 rgba(0,0,0,0.37);
+  --font:'Montserrat', sans-serif;
+}
+body{font-family:var(--font);background:var(--bg);color:var(--fg);line-height:1.6;min-height:100vh;overflow-x:hidden}
+.glass-card{background:var(--glass);backdrop-filter:blur(10px);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;box-shadow:var(--shadow)}
+.orbitron{font-family:'Orbitron', sans-serif}
+.tabs{display:flex;gap:10px;border-bottom:1px solid var(--border);margin-bottom:20px;padding-bottom:10px}
+.tab-btn{padding:10px 15px;background:none;border:none;color:var(--fg-sec);cursor:pointer;font-weight:600;transition:0.3s}
+.tab-btn.active{color:var(--accent);border-bottom:2px solid var(--accent)}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+.app{max-width:1400px;margin:0 auto;padding:20px}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:30px}
+.header h1{font-size:1.8rem;color:var(--accent)}
+.stats-bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:15px;margin-bottom:30px}
+.stat-card{background:var(--glass);padding:15px;border-radius:var(--radius);text-align:center;border:1px solid var(--border)}
+.stat-value{font-size:1.2rem;font-weight:700;display:block}
+.stat-label{font-size:0.7rem;text-transform:uppercase;color:var(--fg-sec)}
+.upload-zone{border:2px dashed var(--border);padding:40px;text-align:center;border-radius:var(--radius-lg);cursor:pointer;transition:0.3s;background:var(--glass)}
+.upload-zone:hover{border-color:var(--accent);background:rgba(0,242,255,0.05)}
+.gallery-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:20px}
+.image-card{background:var(--glass);border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);transition:0.3s}
+.image-card:hover{transform:translateY(-5px);border-color:var(--accent)}
+.card-img{width:100%;aspect-ratio:1;object-fit:cover;cursor:pointer}
+.card-body{padding:15px}
+.card-name{font-size:0.9rem;font-weight:600;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card-actions{display:flex;justify-content:space-between;margin-top:10px}
+.btn{padding:8px 15px;border:none;border-radius:var(--radius);cursor:pointer;font-weight:600;transition:0.3s;display:inline-flex;align-items:center;gap:5px;font-size:0.8rem}
+.btn-primary{background:var(--accent);color:#000}
+.btn-primary:hover{box-shadow:0 0 15px var(--accent)}
+.btn-secondary{background:var(--glass);color:var(--fg);border:1px solid var(--border)}
+.btn-danger{background:rgba(220,38,38,0.2);color:#ff4d4d;border:1px solid rgba(220,38,38,0.5)}
+.btn-danger:hover{background:var(--error);color:#fff}
+.input-field{background:var(--bg-alt);border:1px solid var(--border);color:var(--fg);padding:10px;border-radius:var(--radius);width:100%;outline:none}
+.input-field:focus{border-color:var(--accent)}
+.camera-container{width:100%;max-width:600px;margin:0 auto;border-radius:var(--radius-lg);overflow:hidden;background:#000;position:relative}
+#cameraVideo{width:100%;display:block}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.8);backdrop-filter:blur(5px);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
+.modal-overlay.active{display:flex}
+.modal{background:var(--bg-alt);border:1px solid var(--border);border-radius:var(--radius-lg);padding:30px;max-width:800px;width:100%;position:relative;max-height:90vh;overflow-y:auto}
+.ideas-content{background:rgba(0,0,0,0.3);padding:20px;border-radius:var(--radius);font-size:0.9rem;white-space:pre-wrap}
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
 </head>
 <body>
 
 <?php if (!isset($_SESSION['authenticated'])): ?>
-<div class="container d-flex justify-content-center align-items-center vh-100">
-    <div class="glass-card text-center" style="max-width: 400px; width: 100%;">
-        <h2 class="orbitron mb-4" style="color: var(--neon-cyan);">ACCESO</h2>
-        <input type="password" id="loginPass" class="form-control bg-dark text-white border-secondary mb-3" placeholder="Contraseña">
-        <button class="btn btn-neon-cyan w-100" onclick="login()">Entrar</button>
+<div class="container d-flex justify-content-center align-items-center vh-100" style="display:flex;height:100vh;justify-content:center;align-items:center">
+    <div class="glass-card text-center" style="max-width: 400px; width: 100%;text-align:center">
+        <h2 class="orbitron mb-4" style="color: var(--accent);margin-bottom:20px">ACCESO</h2>
+        <input type="password" id="loginPass" class="input-field" placeholder="Contraseña" style="margin-bottom:20px">
+        <button class="btn btn-primary w-100" onclick="login()" style="width:100%">Entrar</button>
     </div>
 </div>
 <script>
@@ -423,346 +854,334 @@ async function login() {
 </script>
 <?php else: ?>
 
-<div class="container-fluid">
-    <div class="row">
-        <!-- Sidebar -->
-        <div class="col-md-2 sidebar d-none d-md-block">
-            <h3 class="orbitron text-center mb-5" style="color: var(--neon-cyan); font-size: 1.2rem;">VISUAL AI</h3>
-            <nav class="nav flex-column">
-                <a class="nav-link active" href="#" onclick="showModule('gallery')">Galería</a>
-                <a class="nav-link" href="#" onclick="showModule('ai')">IA Asistente</a>
-                <a class="nav-link" href="#" onclick="showModule('config')">Configuración</a>
-                <a class="nav-link" href="#" onclick="showModule('history')">Historial</a>
-                <a class="nav-link mt-5 text-danger" href="?logout=1">Cerrar Sesión</a>
-            </nav>
+<div class="app">
+    <header class="header">
+        <div>
+            <h1 class="orbitron">VISUAL AI</h1>
+            <p style="color:var(--fg-sec);font-size:0.8rem">Inteligencia Visual Avanzada v7.0</p>
+        </div>
+        <div style="display:flex;gap:15px;align-items:center">
+            <span id="aiStatus" style="font-size:0.7rem;text-transform:uppercase"></span>
+            <a href="?logout=1" class="btn btn-danger btn-sm">Cerrar Sesión</a>
+        </div>
+    </header>
+
+    <div class="stats-bar">
+        <div class="stat-card"><span class="stat-value" id="statFiles">-</span><span class="stat-label">Archivos</span></div>
+        <div class="stat-card"><span class="stat-value" id="statSize">-</span><span class="stat-label">Almacenamiento</span></div>
+        <div class="stat-card"><span class="stat-value" id="statProvs">-</span><span class="stat-label">Motores IA</span></div>
+    </div>
+
+    <div class="tabs">
+        <button class="tab-btn active" onclick="showTab('gallery')">Galería</button>
+        <button class="tab-btn" onclick="showTab('camera')">Cámara</button>
+        <button class="tab-btn" onclick="showTab('generate')">Generar</button>
+        <button class="tab-btn" onclick="showTab('config')">Config</button>
+    </div>
+
+    <!-- PANEL GALERIA -->
+    <div id="tab-gallery" class="tab-panel active">
+        <div class="upload-zone" onclick="document.getElementById('fileInput').click()">
+            <h3 class="orbitron">ARRASTRA O HAZ CLIC</h3>
+            <p>Sube tus fotos para analizar con IA</p>
+            <input type="file" id="fileInput" multiple accept="image/*" style="display:none" onchange="handleFiles(this.files)">
         </div>
 
-        <!-- Main Content -->
-        <div class="col-md-10 p-4">
-            <!-- Header -->
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h2 id="moduleTitle" class="orbitron">Galería Inteligente</h2>
-                <div class="d-flex gap-2">
-                    <input type="text" id="searchInput" class="search-input" placeholder="Buscar imagen..." onkeyup="loadGallery()">
-                    <button class="btn btn-outline-info" onclick="document.getElementById('captureFile').click()">📸 Cámara</button>
-                    <button class="btn btn-neon-cyan" onclick="document.getElementById('uploadFile').click()">+ Subir</button>
-                    <input type="file" id="uploadFile" hidden onchange="uploadImage(this)">
-                    <input type="file" id="captureFile" capture="environment" accept="image/*" hidden onchange="uploadImage(this)">
-                </div>
-            </div>
+        <div style="margin: 20px 0; display:flex; gap:10px">
+            <input type="text" id="searchInput" class="input-field" placeholder="Buscar imagen..." onkeyup="searchImages()">
+        </div>
 
-            <!-- Modules -->
-            <div id="galleryModule" class="module-content">
-                <div id="galleryGrid" class="row g-4">
-                    <!-- Images will load here -->
-                </div>
-            </div>
+        <div id="galleryGrid" class="gallery-grid"></div>
+    </div>
 
-            <div id="aiModule" class="module-content d-none">
-                <div class="glass-card">
-                    <h3>Centro de Inteligencia</h3>
-                    <p>Seleccione una imagen de la galería para comenzar.</p>
-                </div>
+    <!-- PANEL CAMARA -->
+    <div id="tab-camera" class="tab-panel">
+        <div class="glass-card text-center">
+            <div class="camera-container mb-3">
+                <video id="cameraVideo" autoplay playsinline></video>
+                <canvas id="cameraCanvas" style="display:none"></canvas>
             </div>
-
-            <div id="configModule" class="module-content d-none">
-                <div class="glass-card col-md-6">
-                    <h3 class="orbitron mb-4">Configuración API</h3>
-                    <form id="configForm">
-                        <div class="mb-3">
-                            <label class="form-label">Gemini API Key</label>
-                            <input type="password" name="gemini_key" class="form-control bg-dark text-white border-secondary">
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">OpenAI API Key</label>
-                            <input type="password" name="openai_key" class="form-control bg-dark text-white border-secondary">
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Proveedor Predeterminado</label>
-                            <select name="provider" class="form-select bg-dark text-white border-secondary">
-                                <option value="gemini">Google Gemini</option>
-                                <option value="openai">OpenAI</option>
-                            </select>
-                        </div>
-                        <div class="row g-2">
-                            <div class="col-8">
-                                <button type="button" class="btn btn-neon-cyan w-100" onclick="saveConfig()">Guardar Cambios</button>
-                            </div>
-                            <div class="col-4">
-                                <button type="button" class="btn btn-outline-danger w-100" onclick="clearConfig()">Limpiar</button>
-                            </div>
-                        </div>
-                    </form>
-                </div>
+            <div style="margin-top:20px; display:flex; justify-content:center; gap:10px">
+                <button class="btn btn-primary" onclick="capturePhoto()">CAPTURAR</button>
+                <button class="btn btn-secondary" onclick="toggleCamera()">ABRIR/CERRAR</button>
             </div>
+            <div id="cameraPreview" style="margin-top:20px; display:flex; gap:10px; overflow-x:auto"></div>
+        </div>
+    </div>
 
-            <div id="historyModule" class="module-content d-none">
-                <div class="glass-card">
-                    <h3 class="orbitron mb-4">Historial de Consultas</h3>
-                    <div id="historyList" class="table-responsive">
-                        <table class="table table-dark table-hover">
-                            <thead>
-                                <tr>
-                                    <th>Fecha</th>
-                                    <th>Imagen</th>
-                                    <th>Tipo/Prompt</th>
-                                    <th>Respuesta</th>
-                                    <th>Resultado</th>
-                                </tr>
-                            </thead>
-                            <tbody id="historyTableBody"></tbody>
-                        </table>
-                    </div>
+    <!-- PANEL GENERAR -->
+    <div id="tab-generate" class="tab-panel">
+        <div class="glass-card">
+            <h3 class="orbitron mb-3">CREAR CON IA</h3>
+            <textarea id="genPrompt" class="input-field" rows="4" placeholder="Describe la imagen..."></textarea>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:15px">
+                <select id="genProvider" class="input-field">
+                    <option value="openai">OpenAI DALL-E 3</option>
+                    <option value="gemini">Google Gemini</option>
+                </select>
+                <button class="btn btn-primary" onclick="generateImage()">GENERAR IMAGEN</button>
+            </div>
+            <div id="genResult" style="margin-top:20px; text-align:center"></div>
+        </div>
+    </div>
+
+    <!-- PANEL CONFIG -->
+    <div id="tab-config" class="tab-panel">
+        <div class="glass-card" style="max-width:600px">
+            <h3 class="orbitron mb-3">API CONFIG</h3>
+            <div style="display:flex; flex-direction:column; gap:15px">
+                <div>
+                    <label class="stat-label">Gemini Key</label>
+                    <input type="password" id="cfgGeminiKey" class="input-field" placeholder="AIza...">
                 </div>
+                <div>
+                    <label class="stat-label">OpenAI Key</label>
+                    <input type="password" id="cfgOpenaiKey" class="input-field" placeholder="sk-...">
+                </div>
+                <div>
+                    <label class="stat-label">Claude Key</label>
+                    <input type="password" id="cfgClaudeKey" class="input-field" placeholder="sk-ant-...">
+                </div>
+                <button class="btn btn-primary" onclick="saveConfig()">GUARDAR CAMBIOS</button>
             </div>
         </div>
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+<!-- MODAL IDEAS -->
+<div class="modal-overlay" id="ideasModal">
+    <div class="modal">
+        <h2 id="ideasTitle" class="orbitron">Análisis Inteligente</h2>
+        <div id="ideasProviders" style="display:flex; gap:10px; margin: 15px 0; flex-wrap:wrap"></div>
+
+        <div style="margin-bottom:15px">
+            <label class="stat-label">Acciones Rápidas:</label>
+            <div style="display:flex; gap:5px; flex-wrap:wrap; margin-top:5px">
+                <button class="btn btn-secondary btn-xs" onclick="setQuickPrompt('Analiza detalladamente este espacio y dime cómo hacerlo más moderno y premium.')">✨ Modernizar</button>
+                <button class="btn btn-secondary btn-xs" onclick="setQuickPrompt('Dame 5 ideas creativas de decoración para este rincón.')">🏠 Decoración</button>
+                <button class="btn btn-secondary btn-xs" onclick="setQuickPrompt('¿Qué paleta de colores combinaría mejor con lo que se ve en esta foto?')">🎨 Colores</button>
+                <button class="btn btn-secondary btn-xs" onclick="setQuickPrompt('Genera un título SEO y una meta-descripción para esta imagen.')">🌐 SEO</button>
+                <button class="btn btn-secondary btn-xs" onclick="setQuickPrompt('Escribe un copy persuasivo para Instagram sobre esta imagen.')">📱 Marketing</button>
+            </div>
+        </div>
+
+        <textarea id="ideasCustomPrompt" class="input-field" rows="2" placeholder="O escribe tu propia pregunta aquí..."></textarea>
+
+        <div id="ideasContent" class="ideas-content mt-3"></div>
+
+        <div id="loadingIdeas" style="display:none; text-align:center; padding:20px">
+            <div class="spinner"></div><br><span style="font-size:0.8rem">Procesando...</span>
+        </div>
+
+        <div style="margin-top:20px; display:flex; justify-content:space-between; align-items:center">
+            <div id="genVariantContainer" style="display:none">
+                <button class="btn btn-primary" style="background:var(--gemini)" onclick="generateFromAnalysis()">🎨 GENERAR NUEVA VERSIÓN</button>
+            </div>
+            <div style="display:flex; gap:10px">
+                <button class="btn btn-secondary" onclick="closeModal('ideasModal')">CERRAR</button>
+                <button class="btn btn-primary" id="btnRetryIdeas">REINTENTAR</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <script>
-    function showModule(module) {
-        document.querySelectorAll('.module-content').forEach(m => m.classList.add('d-none'));
-        document.getElementById(module + 'Module').classList.remove('d-none');
+let currentImage = '';
+let isGen = false;
+let cameraStream = null;
 
-        document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
-        event.currentTarget.classList.add('active');
+async function apiCall(action, data = {}, method = 'GET') {
+    const url = new URL(window.location.href);
+    url.searchParams.set('action', action);
 
-        const titles = {
-            'gallery': 'Galería Inteligente',
-            'ai': 'IA Vision Studio',
-            'config': 'Configuración de Sistemas',
-            'history': 'Registro de Actividad'
-        };
-        document.getElementById('moduleTitle').innerText = titles[module];
-
-        if(module === 'gallery') loadGallery();
-        if(module === 'config') loadConfig();
-        if(module === 'history') loadHistory();
-    }
-
-    async function loadHistory() {
-        const resp = await fetch('imagenes.php?action=get_history');
-        const data = await resp.json();
-        const tbody = document.getElementById('historyTableBody');
-        tbody.innerHTML = '';
-        data.history.forEach(h => {
-                const date = new Date(h.timestamp);
-            tbody.innerHTML += `
-                <tr>
-                        <td class="small">${date.toLocaleString()}</td>
-                    <td><img src="imagenes/${h.filename}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 5px;"></td>
-                    <td><div class="small text-truncate" style="max-width: 200px;">${h.prompt}</div></td>
-                    <td><div class="small text-truncate" style="max-width: 300px;">${h.response}</div></td>
-                    <td>
-                        ${h.result_images ? h.result_images.map(img => `<img src="imagenes/${img}" style="width: 30px; height: 30px; object-fit: cover; border-radius: 3px; margin-right: 2px;">`).join('') : '-'}
-                    </td>
-                </tr>
-            `;
-        });
-    }
-
-    async function loadGallery() {
-        const search = document.getElementById('searchInput').value;
-        const resp = await fetch('imagenes.php?action=list&search=' + search);
-        const data = await resp.json();
-        const grid = document.getElementById('galleryGrid');
-        grid.innerHTML = '';
-
-        data.files.forEach(f => {
-            grid.innerHTML += `
-                <div class="col-md-3">
-                    <div class="glass-card p-2 text-center">
-                        <img src="${f.url}" class="gallery-img mb-2" onclick="openAIChat('${f.name}')">
-                        <div class="small text-truncate">${f.name}</div>
-                        <div class="d-flex justify-content-between mt-2">
-                            <button class="btn btn-sm btn-outline-info" title="Renombrar" onclick="renameImage('${f.name}')">✎</button>
-                            <a href="${f.url}" download class="btn btn-sm btn-outline-success" title="Descargar">⬇</a>
-                            <button class="btn btn-sm btn-outline-danger" title="Eliminar" onclick="deleteImage('${f.name}')">🗑</button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        });
-    }
-
-    async function uploadImage(input) {
-        if(!input.files[0]) return;
-        const formData = new FormData();
-        formData.append('image', input.files[0]);
-        formData.append('action', 'upload');
-
-        const resp = await fetch('imagenes.php', { method: 'POST', body: formData });
-        const data = await resp.json();
-        if(data.success) {
-            loadGallery();
-        } else {
-            alert(data.error);
+    let options = { method };
+    if (method === 'POST') {
+        const fd = data instanceof FormData ? data : new FormData();
+        if (!(data instanceof FormData)) {
+            for (const k in data) fd.append(k, data[k]);
         }
+        fd.append('csrf_token', '<?php echo $csrf; ?>');
+        options.body = fd;
+    } else if (Object.keys(data).length > 0) {
+        for (const k in data) url.searchParams.set(k, data[k]);
     }
 
-    async function deleteImage(filename) {
-        if(!confirm('¿Eliminar esta imagen?')) return;
-        const formData = new FormData();
-        formData.append('filename', filename);
-        formData.append('action', 'delete');
-        await fetch('imagenes.php', { method: 'POST', body: formData });
-        loadGallery();
-    }
+    const resp = await fetch(url);
+    return await resp.json();
+}
 
-    async function renameImage(oldname) {
-        const newname = prompt('Nuevo nombre:', oldname);
-        if(!newname || newname === oldname) return;
-        const formData = new FormData();
-        formData.append('oldname', oldname);
-        formData.append('newname', newname);
-        formData.append('action', 'rename');
-        await fetch('imagenes.php', { method: 'POST', body: formData });
-        loadGallery();
-    }
+function showTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById('tab-' + tab).classList.add('active');
+    if (tab === 'gallery') loadGallery();
+    if (tab !== 'camera') stopCamera();
+}
 
-    async function saveConfig() {
-        const form = document.getElementById('configForm');
-        const formData = new FormData(form);
-        formData.append('action', 'save_config');
-        await fetch('imagenes.php', { method: 'POST', body: formData });
-        alert('Configuración guardada');
-    }
-
-    async function clearConfig() {
-        if(!confirm('¿Eliminar todas las API Keys?')) return;
-        const form = document.getElementById('configForm');
-        form.gemini_key.value = '';
-        form.openai_key.value = '';
-        saveConfig();
-    }
-
-    async function loadConfig() {
-        const resp = await fetch('imagenes.php?action=get_config');
-        const data = await resp.json();
-        const form = document.getElementById('configForm');
-        if(data.config) {
-            form.gemini_key.value = data.config.gemini_key || '';
-            form.openai_key.value = data.config.openai_key || '';
-            form.provider.value = data.config.provider || 'gemini';
-        }
-    }
-
-    let currentAIFile = '';
-
-    function openAIChat(filename) {
-        currentAIFile = filename;
-        showModule('ai');
-        document.getElementById('aiModule').innerHTML = `
-            <div class="row">
-                <div class="col-md-6">
-                    <div class="glass-card h-100">
-                        <div class="text-center mb-3">
-                            <img src="imagenes/${filename}" class="img-fluid rounded shadow-lg" style="max-height: 400px;">
-                        </div>
-                        <h4 class="orbitron text-center">${filename}</h4>
-                        <div class="mt-4">
-                            <h6 class="small text-uppercase text-muted mb-3">Herramientas Especializadas</h6>
-                            <div class="row g-2">
-                                <div class="col-6"><button class="btn btn-sm btn-outline-info w-100" onclick="aiAction('analyze')">🔍 Análisis Detallado</button></div>
-                                <div class="col-6"><button class="btn btn-sm btn-outline-info w-100" onclick="aiAction('decor')">🏠 Ideas Decoración</button></div>
-                                <div class="col-6"><button class="btn btn-sm btn-outline-info w-100" onclick="aiAction('marketing')">📱 Plan Marketing</button></div>
-                                <div class="col-6"><button class="btn btn-sm btn-outline-info w-100" onclick="aiAction('seo')">🌐 Optimización SEO</button></div>
-                                <div class="col-12 mt-2"><button class="btn btn-neon-cyan w-100" onclick="aiAction('variants')">🎨 Generar Variantes de Diseño</button></div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="glass-card d-flex flex-column h-100" style="min-height: 600px;">
-                        <div id="chatBox" class="flex-grow-1 overflow-auto mb-3 p-3" style="background: rgba(0,0,0,0.2); border-radius: 10px;">
-                            <div class="chat-msg system p-2 mb-2 bg-dark rounded small text-info">
-                                [SISTEMA] IA vinculada con éxito. ¿En qué puedo ayudarte hoy con esta imagen?
-                            </div>
-                        </div>
-                        <div id="loadingAI" class="text-center d-none mb-2">
-                            <div class="spinner-border spinner-border-sm text-cyan" role="status"></div>
-                            <span class="ms-2 small text-cyan">IA procesando...</span>
-                        </div>
-                        <div class="mt-auto">
-                             <div class="input-group">
-                                <input type="text" id="chatInput" class="form-control bg-dark text-white border-secondary" placeholder="Escribe tu pregunta o 'Genera una versión moderna'..." onkeypress="if(event.key==='Enter') sendChat()">
-                                <button class="btn btn-neon-cyan" onclick="sendChat()">Enviar</button>
-                             </div>
-                        </div>
+async function loadGallery() {
+    const r = await apiCall('list');
+    const grid = document.getElementById('galleryGrid');
+    grid.innerHTML = '';
+    r.images.forEach(img => {
+        grid.innerHTML += `
+            <div class="image-card">
+                <img src="${img.url}" class="card-img" onclick="openIdeas('${img.name}', ${img.generated})">
+                <div class="card-body">
+                    <span class="card-name">${img.name}</span>
+                    <div class="card-meta" style="font-size:0.7rem; color:var(--fg-sec)">${img.size_fmt} | ${img.dimensions}</div>
+                    <div class="card-actions">
+                        <button class="btn btn-primary btn-sm" onclick="openIdeas('${img.name}', ${img.generated})">IA</button>
+                        <a href="${img.url}" download class="btn btn-secondary btn-sm">⬇</a>
+                        <button class="btn btn-danger btn-sm" onclick="deleteImg('${img.name}', ${img.generated})">X</button>
                     </div>
                 </div>
             </div>
         `;
-    }
+    });
+    updateStats();
+}
 
-    async function sendChat(customPrompt = '', type = 'chat') {
-        const input = document.getElementById('chatInput');
-        const prompt = customPrompt || input.value;
-        if(!prompt && type === 'chat') return;
+async function updateStats() {
+    const r = await apiCall('stats');
+    document.getElementById('statFiles').textContent = r.total_files;
+    document.getElementById('statSize').textContent = r.total_size;
+    document.getElementById('statProvs').textContent = r.providers.length;
+}
 
-        const chatBox = document.getElementById('chatBox');
-        const loading = document.getElementById('loadingAI');
-
-        // User Message
-        if(type === 'chat') {
-            chatBox.innerHTML += `<div class="chat-msg user p-2 mb-2 bg-secondary rounded small text-white text-end">${prompt}</div>`;
-            input.value = '';
-        } else {
-            chatBox.innerHTML += `<div class="chat-msg system p-2 mb-2 bg-dark rounded small text-warning">[ACCION: ${type.toUpperCase()}] Iniciando procesamiento...</div>`;
-        }
-
-        loading.classList.remove('d-none');
-        chatBox.scrollTop = chatBox.scrollHeight;
-
-        try {
-            const formData = new FormData();
-            formData.append('action', 'ai_chat');
-            formData.append('filename', currentAIFile);
-            formData.append('prompt', prompt);
-            formData.append('type', type);
-
-            const resp = await fetch('imagenes.php', { method: 'POST', body: formData });
-            const data = await resp.json();
-
-            loading.classList.add('d-none');
-
-            if(data.success) {
-                let html = `<div class="chat-msg ai p-2 mb-2 bg-primary bg-opacity-25 rounded small border border-primary">${data.response.replace(/\n/g, '<br>')}</div>`;
-
-                if(data.new_images && data.new_images.length > 0) {
-                    html += `<div class="row g-2 mt-2">`;
-                    data.new_images.forEach(img => {
-                        html += `
-                            <div class="col-6 text-center">
-                                <img src="imagenes/${img}" class="img-fluid rounded mb-1 border border-cyan" style="max-height: 150px; cursor: pointer;" onclick="openAIChat('${img}')">
-                                <div class="x-small text-cyan" style="font-size: 0.7rem;">Nueva Idea</div>
-                            </div>
-                        `;
-                    });
-                    html += `</div>`;
-                }
-                chatBox.innerHTML += html;
-            } else {
-                chatBox.innerHTML += `<div class="chat-msg error p-2 mb-2 bg-danger bg-opacity-25 rounded small border border-danger">${data.error}</div>`;
-            }
-        } catch (e) {
-            loading.classList.add('d-none');
-            chatBox.innerHTML += `<div class="chat-msg error p-2 mb-2 bg-danger bg-opacity-25 rounded small border border-danger">Error crítico: ${e.message}</div>`;
-        }
-        chatBox.scrollTop = chatBox.scrollHeight;
-    }
-
-    function aiAction(type) {
-        sendChat('', type);
-    }
-
-    // Inicializar
+async function handleFiles(files) {
+    const fd = new FormData();
+    for (const f of files) fd.append('images[]', f);
+    await apiCall('upload', fd, 'POST');
     loadGallery();
+}
+
+async function deleteImg(name, gen) {
+    if (!confirm('Eliminar?')) return;
+    await apiCall('delete', { 'names[]': name, 'generated[]': gen ? 1 : 0 }, 'POST');
+    loadGallery();
+}
+
+async function openIdeas(name, generated) {
+    currentImage = name;
+    isGen = generated;
+    document.getElementById('ideasTitle').textContent = name;
+    document.getElementById('ideasContent').textContent = 'Selecciona un motor de IA para analizar...';
+
+    const stats = await apiCall('stats');
+    const provs = stats.providers;
+    const bar = document.getElementById('ideasProviders');
+    bar.innerHTML = '';
+
+    provs.forEach(p => {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-secondary';
+        btn.textContent = p.toUpperCase();
+        btn.onclick = () => doAnalyze(p);
+        bar.appendChild(btn);
+    });
+
+    document.getElementById('ideasModal').classList.add('active');
+}
+
+let lastAnalysisProvider = '';
+
+async function doAnalyze(provider) {
+    lastAnalysisProvider = provider;
+    const content = document.getElementById('ideasContent');
+    const loader = document.getElementById('loadingIdeas');
+    const genBtn = document.getElementById('genVariantContainer');
+
+    content.style.display = 'none';
+    loader.style.display = 'block';
+    genBtn.style.display = 'none';
+
+    const prompt = document.getElementById('ideasCustomPrompt').value;
+    try {
+        const r = await apiCall('analyze', { name: currentImage, provider, generated: isGen ? 1 : 0, prompt });
+        loader.style.display = 'none';
+        content.style.display = 'block';
+        content.innerHTML = r.ideas[0].replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+        genBtn.style.display = 'block';
+    } catch (e) {
+        loader.style.display = 'none';
+        content.style.display = 'block';
+        content.textContent = 'Error: ' + e.message;
+    }
+}
+
+function setQuickPrompt(p) {
+    document.getElementById('ideasCustomPrompt').value = p;
+    if(lastAnalysisProvider) doAnalyze(lastAnalysisProvider);
+    else {
+        // click the first provider button if available
+        const first = document.querySelector('#ideasProviders button');
+        if(first) first.click();
+    }
+}
+
+async function generateFromAnalysis() {
+    const analysis = document.getElementById('ideasContent').innerText;
+    const prompt = "Basado en este análisis: " + analysis.substring(0, 500) + "... Genera una nueva imagen mejorada fotorrealista.";
+    showTab('generate');
+    document.getElementById('genPrompt').value = prompt;
+    generateImage();
+}
+
+async function generateImage() {
+    const prompt = document.getElementById('genPrompt').value;
+    const provider = document.getElementById('genProvider').value;
+    const res = document.getElementById('genResult');
+    res.innerHTML = 'Generando imagen...';
+    const r = await apiCall('generate', { prompt, provider }, 'POST');
+    if (r.success) {
+        res.innerHTML = `<img src="${r.image.url}" style="max-width:100%; border-radius:10px">`;
+        loadGallery();
+    } else {
+        res.textContent = 'Error: ' + r.message;
+    }
+}
+
+async function toggleCamera() {
+    if (cameraStream) { stopCamera(); } else { startCamera(); }
+}
+
+async function startCamera() {
+    cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    document.getElementById('cameraVideo').srcObject = cameraStream;
+}
+
+function stopCamera() {
+    if (cameraStream) {
+        cameraStream.getTracks().forEach(t => t.stop());
+        cameraStream = null;
+        document.getElementById('cameraVideo').srcObject = null;
+    }
+}
+
+async function capturePhoto() {
+    const video = document.getElementById('cameraVideo');
+    const canvas = document.getElementById('cameraCanvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const data = canvas.toDataURL('image/jpeg');
+    const r = await apiCall('upload_camera', { image_data: data }, 'POST');
+    loadGallery();
+}
+
+function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+async function saveConfig() {
+    const gemini = document.getElementById('cfgGeminiKey').value;
+    const openai = document.getElementById('cfgOpenaiKey').value;
+    const claude = document.getElementById('cfgClaudeKey').value;
+    await apiCall('save_config', { gemini_api_key: gemini, openai_api_key: openai, claude_api_key: claude }, 'POST');
+    alert('Configuración guardada');
+}
+
+loadGallery();
 </script>
 <?php endif; ?>
-
 </body>
 </html>
