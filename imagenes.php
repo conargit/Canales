@@ -604,37 +604,16 @@ function generate_image_gemini($prompt, $size = '1024x1024') {
 }
 
 // ──────────────────────────────────────────────────────────────
-// SEGURIDAD & SESIÓN
+// SEGURIDAD (DESACTIVADA POR SOLICITUD)
 // ──────────────────────────────────────────────────────────────
-define('ADMIN_PASS', 'admin123');
-
-if (isset($_GET['logout'])) {
-    session_destroy();
-    header("Location: imagenes.php");
-    exit;
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login_pass'])) {
-    if ($_POST['login_pass'] === ADMIN_PASS) {
-        $_SESSION['authenticated'] = true;
-        json_out(['success' => true, 'message' => 'Login exitoso']);
-    } else {
-        json_out(['success' => false, 'error' => 'Contraseña incorrecta'], 401);
-    }
-}
-
-if (!isset($_SESSION['authenticated']) || $_SESSION['authenticated'] !== true) {
-    if (isset($_GET['action']) || isset($_POST['action'])) {
-        json_out(['success' => false, 'error' => 'No autorizado'], 403);
-    }
-}
+$_SESSION['authenticated'] = true;
 
 // ──────────────────────────────────────────────────────────────
 // ROUTER AJAX
 // ──────────────────────────────────────────────────────────────
 $action = isset($_GET['action']) ? $_GET['action'] : (isset($_POST['action']) ? $_POST['action'] : null);
 
-if ($action && isset($_SESSION['authenticated'])) {
+if ($action) {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $csrf = isset($_POST['csrf_token']) ? $_POST['csrf_token'] :
                 (isset($_SERVER['HTTP_X_CSRF_TOKEN']) ? $_SERVER['HTTP_X_CSRF_TOKEN'] : '');
@@ -833,26 +812,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--fg);line-height:1.
 </head>
 <body>
 
-<?php if (!isset($_SESSION['authenticated'])): ?>
-<div class="container d-flex justify-content-center align-items-center vh-100" style="display:flex;height:100vh;justify-content:center;align-items:center">
-    <div class="glass-card text-center" style="max-width: 400px; width: 100%;text-align:center">
-        <h2 class="orbitron mb-4" style="color: var(--accent);margin-bottom:20px">ACCESO</h2>
-        <input type="password" id="loginPass" class="input-field" placeholder="Contraseña" style="margin-bottom:20px">
-        <button class="btn btn-primary w-100" onclick="login()" style="width:100%">Entrar</button>
-    </div>
-</div>
-<script>
-async function login() {
-    const pass = document.getElementById('loginPass').value;
-    const formData = new FormData();
-    formData.append('login_pass', pass);
-    const resp = await fetch('imagenes.php', { method: 'POST', body: formData });
-    const data = await resp.json();
-    if(data.success) location.reload();
-    else alert(data.error);
-}
-</script>
-<?php else: ?>
+<?php if (true): // Autenticación saltada por solicitud ?>
 
 <div class="app">
     <header class="header">
@@ -862,7 +822,6 @@ async function login() {
         </div>
         <div style="display:flex;gap:15px;align-items:center">
             <span id="aiStatus" style="font-size:0.7rem;text-transform:uppercase"></span>
-            <a href="?logout=1" class="btn btn-danger btn-sm">Cerrar Sesión</a>
         </div>
     </header>
 
